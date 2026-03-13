@@ -59,41 +59,61 @@ async function saveData(path,arr) {
 let _saving=false;
 const setSaving=v=>{_saving=v;};
 
-// ─── GOOGLE DRIVE ─────────────────────────────────────────────────────────────
+// ─── GOOGLE DRIVE (Service Account) ───────────────────────────────────────────
 const GOOGLE_CLIENT_ID="715743824745-81k22knar0ttnnihcahuf6ibporgm4fv.apps.googleusercontent.com";
 const DRIVE_FOLDER_ID="1c9S_BdJ9O2anyXh6ZKuCH2je5PEUQQSB";
 const ALLOWED_EMAILS=["persensovenezuela@gmail.com","perezsj02@gmail.com","berruetaperez@gmail.com","marioams98@gmail.com"];
-let _googleToken=null;
-let _googleUser=null;
+const SA_EMAIL="persenso-drive@perfumeria-base-datos.iam.gserviceaccount.com";
+const SA_KEY=`-----BEGIN PRIVATE KEY-----\nMIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQC6rJPURXDLckNJ\n2J3qJtDr7NEzcTuF4QkFAJ/5JlyswVvb+LR5ofk1lu/FqQI+Zp38wEm486+MTNSy\nUT7Sbg5Avf3Azn17L/TYuBAu6Z+4C1mP/fR9sJehoOWuYDsUBA1cBrSb2PMv6ib9\n8CVtYpqUj16wtIaUGdM3njSFmV+sgKSH1takIazgV8hKjTqvP3/4MFf3qQkJPYrJ\nVo/aXiAZPKVFbvvrgU+mNkGLldqya0CfJIGgiiM/nADbrJ3Wqih3Fm+QGMytUUDB\nO6anyZyhuavCyjBakbA8prlt5esgPLq269+zwwjRUbnXNskK4Vk+6qfr1NKtyHAA\nNpfqkVWBAgMBAAECgf93BEDcPcnEbH1qP6mu+ECLqtlWqwMAQJG3lsZn24WKv10J\nym+GfTaebDVDGJZNoq9nzlEykmuCUBnr9tDO6Uw9CuUWYJCwUcsRwYjP4DPs64+W\ntpuC52xFqIfHvaLtCAhcfAn6sz+ZdPiXPt0d+JgFz8LXdsG2+yAnfb6Oz1Kob+RM\nD75+WFnXnPvBrsihHqQCD4rIDAHmxXr/IjNdZYNLf5T4eFf5GrfvyVdB3OixCFis\nHKlKh9YKYJO6yNa2rbnNj1gY89FxWx9qgXvXj3uAwvcVoCx8qpknKFuJ1R5JmYVV\n4JXgbYBVnxPMuOLzKSIgaLCJY/vAIIscKdS0rAECgYEA8b1dJeksoMOZpVvP6+1W\nLIBKDL+z0hDuA5XSRrOL0rBWDxrQdGQJGwdotRy0BzQblGBvHE3gYaKBUWypfNqp\nHmoxRp7Hh0R6ib+KXiF6VW5PkJ/y7Q8pruQ+QwpApgjs6TAtrkiJnfU3x3x8V3Id\nGSmX9AbhtuHuVG5XhZUMDQECgYEAxa+j06PUZyGmvHPYi5Wbdd8zBSGQ3wWY5CcJ\nDJ8xxwHbEMAHwnvvTZojhmKBTU5FayCIRROfzY8945Bc3UACHVd8xkaT6lve/lYj\nWVR9uX/701O2XI5dbn0cOq1Cs7k0xO71mtd5uBYvv8w3SMrVeIm2yJDD094bnpq2\nbwdWyIECgYA3WtRcnQNSINgrDFYVQTitYgcS2kb0AFpwSbtn4y9OZICgXtSDAnEv\nVkf8yQDUcXMrS9XFlnOeB9cy7P32kB+PzmNQN4WbDOw+ZLTrjyDzNRpVFLtM218B\nJFS5hzx8iKivUQ/0y7lviTpnnLLgV0oge+zGvVisRxoLDWVPOm0TAQKBgDsR+7Me\n7jYO8SK4vwkeoEB9fGJZIE/z/TaXj3WtEBO2Mz5zEx6DKAOZPmpGfvqZm9ah9vYl\nIggreEPKfGVEXh1kag1ZQ5Ow9hYrqQ5lV9gZLSd9iS1pAPQmAExsP1Uyz1jVSqCF\nKILgZk46eH6Q1W7aP7r4vvtNEBW5hy/wEneBAoGAXBWRDBZar3fPgBMt88J27wrN\nEACvTEleDdgEIz6k9v1/nje29tr1hNLS3xaW9bhhIBf8gmbV2943vOJh5DVAdSsW\nfNa/bntSzw0u940yUVz2auntkWVCCWTeFv/Tohv9X7y8CLDh0EUsd0sp4q0BHjPJ\nclrUS0rr5X5YBwBXUf8=\n-----END PRIVATE KEY-----\n`;
 
-function setGoogleSession(token,email,name){_googleToken=token;_googleUser={email,name};}
-function clearGoogleSession(){_googleToken=null;_googleUser=null;}
-function getGoogleToken(){return _googleToken;}
+let _googleUser=null;
+let _saToken=null;
+let _saTokenExp=0;
+
+function clearGoogleSession(){_googleUser=null;_saToken=null;_saTokenExp=0;}
 function getGoogleUser(){return _googleUser;}
 
-async function uploadToDrive(file){
-  if(!_googleToken)throw new Error("No autenticado con Google");
-  const metadata={name:file.name,parents:[DRIVE_FOLDER_ID]};
-  const form=new FormData();
-  form.append("metadata",new Blob([JSON.stringify(metadata)],{type:"application/json"}));
-  form.append("file",file);
-  const res=await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",{
-    method:"POST",
-    headers:{Authorization:`Bearer ${_googleToken}`},
-    body:form
-  });
-  if(!res.ok){
-    const err=await res.json();
-    throw new Error(err.error?.message||"Error subiendo a Drive");
-  }
+function b64url(str){
+  return btoa(str).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+}
+function b64urlU8(arr){
+  let s='';for(const b of arr)s+=String.fromCharCode(b);
+  return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+}
+
+async function getSAToken(){
+  const now=Math.floor(Date.now()/1000);
+  if(_saToken&&now<_saTokenExp-60)return _saToken;
+  // Parsear PEM
+  const pem=SA_KEY.replace(/-----[^-]+-----/g,'').replace(/\s/g,'');
+  const der=Uint8Array.from(atob(pem),c=>c.charCodeAt(0));
+  const key=await crypto.subtle.importKey('pkcs8',der,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']);
+  // Crear JWT
+  const header=b64url(JSON.stringify({alg:'RS256',typ:'JWT'}));
+  const claim=b64url(JSON.stringify({iss:SA_EMAIL,scope:'https://www.googleapis.com/auth/drive.file',aud:'https://oauth2.googleapis.com/token',exp:now+3600,iat:now}));
+  const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,new TextEncoder().encode(`${header}.${claim}`));
+  const jwt=`${header}.${claim}.${b64urlU8(new Uint8Array(sig))}`;
+  // Intercambiar por token
+  const res=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`});
   const data=await res.json();
-  // Hacer el archivo público para que cualquiera con el link pueda verlo
-  await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{
-    method:"POST",
-    headers:{Authorization:`Bearer ${_googleToken}`,"Content-Type":"application/json"},
-    body:JSON.stringify({role:"reader",type:"anyone"})
-  });
-  return{id:data.id,name:data.name,url:data.webViewLink};
+  if(!data.access_token)throw new Error('No se pudo obtener token de Drive');
+  _saToken=data.access_token;
+  _saTokenExp=now+3600;
+  return _saToken;
+}
+
+async function uploadToDrive(file){
+  const token=await getSAToken();
+  const metadata={name:`${Date.now()}_${file.name}`,parents:[DRIVE_FOLDER_ID]};
+  const form=new FormData();
+  form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
+  form.append('file',file);
+  const res=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`},body:form});
+  if(!res.ok){const e=await res.json();throw new Error(e.error?.message||'Error subiendo a Drive');}
+  const d=await res.json();
+  // Hacer público para ver con link
+  await fetch(`https://www.googleapis.com/drive/v3/files/${d.id}/permissions`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({role:'reader',type:'anyone'})});
+  return{id:d.id,name:file.name,url:d.webViewLink};
 }
 const G={bg:"#0d0d0f",card:"#16161a",cardBorder:"#2a2a32",gold:"#c9a84c",goldLight:"#e8c97a",goldDark:"#8a6c28",text:"#f0ece4",textMuted:"#888",green:"#4caf7d",red:"#e05c5c",blue:"#5c9fe0"};
 const uid=()=>Math.random().toString(36).slice(2,10);
@@ -1554,16 +1574,6 @@ function EditOrderModal({order,inventory,setInventory,restocks,setRestocks,suppl
   const handleFiles=async(e)=>{
     const files=[...e.target.files];e.target.value="";
     if(!files.length)return;
-    const token=getGoogleToken();
-    if(!token){
-      for(const file of files){
-        if(file.size>300000){alert(`"${file.name}" es muy grande. Inicia sesión con Google para subir archivos pesados.`);continue;}
-        const reader=new FileReader();
-        reader.onload=ev=>setAttachments(a=>[...a,{name:file.name,dataUrl:ev.target.result,type:file.type}]);
-        reader.readAsDataURL(file);
-      }
-      return;
-    }
     setUploading(true);
     for(const file of files){
       try{
@@ -1699,17 +1709,6 @@ function BulkRestockModal({inventory,setInventory,restocks,setRestocks,suppliers
   const handleFiles=async(e)=>{
     const files=[...e.target.files];e.target.value="";
     if(!files.length)return;
-    const token=getGoogleToken();
-    if(!token){
-      // Sin Drive: guardar como base64 pequeño (solo imágenes, max 300KB)
-      for(const file of files){
-        if(file.size>300000){alert(`"${file.name}" es muy grande. Inicia sesión con Google para subir archivos pesados.`);continue;}
-        const reader=new FileReader();
-        reader.onload=ev=>setAttachments(a=>[...a,{name:file.name,dataUrl:ev.target.result,type:file.type}]);
-        reader.readAsDataURL(file);
-      }
-      return;
-    }
     setUploading(true);
     for(const file of files){
       try{
@@ -1849,7 +1848,7 @@ function BulkRestockModal({inventory,setInventory,restocks,setRestocks,suppliers
       {/* Sección 4: Adjuntos */}
       <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"14px",marginBottom:12,border:`1px solid ${G.cardBorder}`}}>
         <div style={{fontSize:12,fontWeight:600,color:G.goldLight,marginBottom:6,letterSpacing:1}}>📎 COMPROBANTES</div>
-        {!getGoogleToken()&&<div style={{fontSize:11,color:"#888",marginBottom:8,padding:"6px 10px",background:"rgba(255,255,255,.03)",borderRadius:6}}>💡 Inicia sesión con Google para subir PDFs e imágenes a Drive sin límite de tamaño.</div>}
+        {!getGoogleToken&&false&&<div/>}
         <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple onChange={handleFiles} style={{display:"none"}}/>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           <Btn variant="ghost" size="sm" onClick={()=>fileRef.current.click()} disabled={uploading}>
@@ -1944,14 +1943,8 @@ function Login({onLogin}){
         setError(`❌ ${email} no tiene acceso a PerSenso.`);
         setLoading(false);return;
       }
-      window.google.accounts.oauth2.initTokenClient({
-        client_id:GOOGLE_CLIENT_ID,
-        scope:"https://www.googleapis.com/auth/drive.file",
-        callback:(tokenResp)=>{
-          if(tokenResp.access_token)setGoogleSession(tokenResp.access_token,email,name);
-          onLogin(name);
-        },
-      }).requestAccessToken({prompt:""});
+      _googleUser={email,name};
+      onLogin(name);
     }catch(e){
       setError("Error al iniciar sesión. Intenta de nuevo.");
       setLoading(false);
