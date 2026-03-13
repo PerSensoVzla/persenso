@@ -1,0 +1,2051 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>✦ PerSenso — Perfumería</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0f;color:#f0ece4;font-family:'DM Sans',sans-serif}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0d0d0f}
+::-webkit-scrollbar-thumb{background:#8a6c28;border-radius:3px}
+input,select,textarea{background:#1e1e24;border:1px solid #2a2a32;color:#f0ece4;font-family:'DM Sans',sans-serif;font-size:14px;padding:10px 14px;border-radius:8px;width:100%;outline:none;transition:border-color .2s}
+input:focus,select:focus,textarea:focus{border-color:#c9a84c}
+input::placeholder,textarea::placeholder{color:#888}
+select option{background:#1e1e24}
+button{cursor:pointer;font-family:'DM Sans',sans-serif}
+.fade-in{animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+.gold-line{background:linear-gradient(90deg,transparent,#c9a84c,transparent);height:1px;width:100%;margin:8px 0}
+.badge-pend{background:rgba(224,92,92,.18);color:#e05c5c}
+.badge-parc{background:rgba(201,168,76,.18);color:#c9a84c}
+.badge-paid{background:rgba(76,175,125,.18);color:#4caf7d}
+.dropdown-list{position:absolute;top:100%;left:0;right:0;background:#1e1e24;border:1px solid #c9a84c;border-radius:8px;max-height:180px;overflow-y:auto;z-index:300;margin-top:2px}
+.dropdown-item{padding:9px 14px;cursor:pointer;font-size:13px;transition:background .15s}
+.dropdown-item:hover{background:rgba(201,168,76,.15)}
+.tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;borderRadius:9px;background:#e05c5c;color:#fff;fontSize:10px;fontWeight:700;padding:0 5px;marginLeft:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+// ─── FIREBASE ─────────────────────────────────────────────────────────────────
+const FB_URL = "https://perfumeria-base-datos-default-rtdb.firebaseio.com";
+async function fbGet(path) {
+  try {
+    const r=await fetch(`${FB_URL}/${path}.json`);
+    const d=await r.json();
+    if(!d||typeof d!=="object")return[];
+    return Object.values(d).filter(v=>v&&typeof v==="object");
+  } catch(e) { return []; }
+}
+async function saveData(path,arr) {
+  setSaving(true);
+  try { const obj={}; arr.forEach(i=>{obj[i.id]=i;}); await fetch(`${FB_URL}/${path}.json`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(obj)}); } catch(e){console.error(e);}
+  setTimeout(()=>setSaving(false),3000);
+}
+
+// Pausa polling durante escrituras
+let _saving=false;
+const setSaving=v=>{_saving=v;};
+
+// ─── GOOGLE DRIVE ─────────────────────────────────────────────────────────────
+const GOOGLE_CLIENT_ID="715743824745-81k22knar0ttnnihcahuf6ibporgm4fv.apps.googleusercontent.com";
+const DRIVE_FOLDER_ID="1c9S_BdJ9O2anyXh6ZKuCH2je5PEUQQSB";
+const ALLOWED_EMAILS=["persensovenezuela@gmail.com","perezsj02@gmail.com","berruetaperez@gmail.com","marioams98@gmail.com"];
+let _googleToken=null;
+let _googleUser=null;
+
+function setGoogleSession(token,email,name){_googleToken=token;_googleUser={email,name};}
+function clearGoogleSession(){_googleToken=null;_googleUser=null;}
+function getGoogleToken(){return _googleToken;}
+function getGoogleUser(){return _googleUser;}
+
+async function uploadToDrive(file){
+  if(!_googleToken)throw new Error("No autenticado con Google");
+  const metadata={name:file.name,parents:[DRIVE_FOLDER_ID]};
+  const form=new FormData();
+  form.append("metadata",new Blob([JSON.stringify(metadata)],{type:"application/json"}));
+  form.append("file",file);
+  const res=await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",{
+    method:"POST",
+    headers:{Authorization:`Bearer ${_googleToken}`},
+    body:form
+  });
+  if(!res.ok){
+    const err=await res.json();
+    throw new Error(err.error?.message||"Error subiendo a Drive");
+  }
+  const data=await res.json();
+  // Hacer el archivo público para que cualquiera con el link pueda verlo
+  await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{
+    method:"POST",
+    headers:{Authorization:`Bearer ${_googleToken}`,"Content-Type":"application/json"},
+    body:JSON.stringify({role:"reader",type:"anyone"})
+  });
+  return{id:data.id,name:data.name,url:data.webViewLink};
+}
+const G={bg:"#0d0d0f",card:"#16161a",cardBorder:"#2a2a32",gold:"#c9a84c",goldLight:"#e8c97a",goldDark:"#8a6c28",text:"#f0ece4",textMuted:"#888",green:"#4caf7d",red:"#e05c5c",blue:"#5c9fe0"};
+const uid=()=>Math.random().toString(36).slice(2,10);
+const fmt$=n=>`$${parseFloat(n||0).toFixed(2)}`;
+const fmtDate=d=>d?new Date(d+"T12:00:00").toLocaleDateString("es-ES",{day:"2-digit",month:"short",year:"numeric"}):"—";
+const fmtMonth=d=>d?new Date(d+"T12:00:00").toLocaleDateString("es-ES",{month:"short",year:"2-digit"}):"";
+const today=()=>new Date().toISOString().split("T")[0];
+const now=()=>new Date().toISOString();
+
+function calcSaleBalance(sale,payments){
+  const paid=payments.filter(p=>p.saleId===sale.id).reduce((s,p)=>s+parseFloat(p.amount||0),0);
+  const total=parseFloat(sale.total||0);
+  const remaining=total-paid;
+  return{paid,remaining:Math.max(0,remaining),status:remaining<=0?"pagado":paid>0?"parcial":"pendiente"};
+}
+function downloadReceipt(dataUrl,filename="comprobante.jpg"){
+  const a=document.createElement("a");a.href=dataUrl;a.download=filename;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+function filterByRange(items,dateFrom,dateTo,dateField="date"){
+  if(!dateFrom&&!dateTo)return items;
+  return items.filter(i=>{
+    const raw=i[dateField]||i.createdAt; if(!raw)return false;
+    const d=raw.slice(0,10);
+    if(dateFrom&&d<dateFrom)return false;
+    if(dateTo&&d>dateTo)return false;
+    return true;
+  });
+}
+
+// ─── BASE COMPONENTS ──────────────────────────────────────────────────────────
+const Card=({children,style={},onClick})=><div onClick={onClick} style={{background:G.card,border:`1px solid ${G.cardBorder}`,borderRadius:14,padding:20,...style}}>{children}</div>;
+const Btn=({children,onClick,variant="gold",size="md",style={},disabled})=>{
+  const base={border:"none",borderRadius:8,fontWeight:500,transition:"all .2s",opacity:disabled?.5:1,cursor:disabled?"not-allowed":"pointer",fontSize:size==="sm"?12:14,padding:size==="sm"?"6px 12px":"10px 20px"};
+  const variants={gold:{background:`linear-gradient(135deg,${G.goldDark},${G.gold})`,color:"#0d0d0f"},ghost:{background:"transparent",color:G.textMuted,border:`1px solid ${G.cardBorder}`},danger:{background:"rgba(224,92,92,.15)",color:G.red,border:"1px solid rgba(224,92,92,.3)"},success:{background:"rgba(76,175,125,.15)",color:G.green,border:"1px solid rgba(76,175,125,.3)"},edit:{background:"rgba(92,159,224,.15)",color:G.blue,border:"1px solid rgba(92,159,224,.3)"}};
+  return <button onClick={disabled?undefined:onClick} style={{...base,...variants[variant],...style}}>{children}</button>;
+};
+const Badge=({status})=>{const map={pendiente:["badge-pend","Pendiente"],parcial:["badge-parc","Parcial"],pagado:["badge-paid","Pagado"]};const[cls,label]=map[status]||["badge-pend",status];return <span className={cls} style={{padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:500}}>{label}</span>;};
+const Field=({label,children})=><div style={{marginBottom:14}}><label style={{fontSize:12,color:G.textMuted,display:"block",marginBottom:5}}>{label}</label>{children}</div>;
+const Modal=({title,onClose,children,wide})=>(
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="fade-in" style={{background:G.card,border:`1px solid ${G.cardBorder}`,borderRadius:16,width:"100%",maxWidth:wide?600:480,maxHeight:"90vh",overflow:"auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 20px",borderBottom:`1px solid ${G.cardBorder}`}}>
+        <span style={{fontFamily:"Cormorant Garamond",fontSize:22,color:G.goldLight}}>{title}</span>
+        <button onClick={onClose} style={{background:"none",border:"none",color:G.textMuted,fontSize:20,cursor:"pointer"}}>✕</button>
+      </div>
+      <div style={{padding:20}}>{children}</div>
+    </div>
+  </div>
+);
+const ConfirmModal=({message,subtext,onConfirm,onCancel})=>(
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <div className="fade-in" style={{background:G.card,border:"1px solid rgba(224,92,92,.4)",borderRadius:16,width:"100%",maxWidth:380,padding:28,textAlign:"center"}}>
+      <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
+      <div style={{fontFamily:"Cormorant Garamond",fontSize:22,color:G.goldLight,marginBottom:8}}>{message}</div>
+      {subtext&&<div style={{fontSize:13,color:G.textMuted,marginBottom:20,lineHeight:1.6}}>{subtext}</div>}
+      <div style={{display:"flex",gap:10,marginTop:20}}>
+        <Btn variant="ghost" onClick={onCancel} style={{flex:1}}>Cancelar</Btn>
+        <Btn variant="danger" onClick={onConfirm} style={{flex:1}}>Sí, eliminar</Btn>
+      </div>
+    </div>
+  </div>
+);
+
+// ─── DATE RANGE FILTER ────────────────────────────────────────────────────────
+function DateRangeFilter({dateFrom,dateTo,onChange}){
+  const setPreset=(days)=>{if(days===null){onChange("","");return;}const to=today();const from=new Date();from.setDate(from.getDate()-days);onChange(from.toISOString().split("T")[0],to);};
+  const hasFilter=dateFrom||dateTo;
+  const presets=[{l:"Hoy",d:0},{l:"7 días",d:7},{l:"30 días",d:30},{l:"90 días",d:90},{l:"6 meses",d:180},{l:"1 año",d:365}];
+  return(
+    <div style={{marginBottom:20,padding:"14px 16px",background:"rgba(201,168,76,.05)",borderRadius:12,border:"1px solid rgba(201,168,76,.15)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
+        <span style={{fontSize:13,color:G.gold,fontWeight:500}}>📅 Filtrar por período</span>
+        {hasFilter&&<button onClick={()=>setPreset(null)} style={{fontSize:11,padding:"4px 10px",borderRadius:20,background:"rgba(224,92,92,.15)",border:"1px solid rgba(224,92,92,.3)",color:G.red,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>✕ Limpiar filtro</button>}
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+        {presets.map(p=><button key={p.d} onClick={()=>setPreset(p.d)} style={{fontSize:12,padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"DM Sans,sans-serif",fontWeight:500,background:"rgba(255,255,255,.05)",color:G.textMuted,transition:"all .2s"}} onMouseEnter={e=>e.target.style.background="rgba(201,168,76,.2)"} onMouseLeave={e=>e.target.style.background="rgba(255,255,255,.05)"}>{p.l}</button>)}
+      </div>
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{flex:"1 1 140px"}}><label style={{fontSize:11,color:G.textMuted,display:"block",marginBottom:4}}>Desde</label><input type="date" value={dateFrom} onChange={e=>onChange(e.target.value,dateTo)} style={{padding:"7px 12px",fontSize:13}}/></div>
+        <div style={{flex:"1 1 140px"}}><label style={{fontSize:11,color:G.textMuted,display:"block",marginBottom:4}}>Hasta</label><input type="date" value={dateTo} onChange={e=>onChange(dateFrom,e.target.value)} style={{padding:"7px 12px",fontSize:13}}/></div>
+        {hasFilter&&<div style={{fontSize:12,color:G.gold,marginTop:14}}>✦ {dateFrom?fmtDate(dateFrom):"inicio"} → {dateTo?fmtDate(dateTo):"hoy"}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── CLIENT SEARCH ────────────────────────────────────────────────────────────
+function ClienteSearch({clients,value,onChange,placeholder="Buscar por nombre o CI..."}){
+  const[query,setQuery]=useState("");const[open,setOpen]=useState(false);const wrapRef=useRef();
+  useEffect(()=>{if(value){const c=clients.find(c=>c.id===value);if(c)setQuery(c.name+(c.ci?` — ${c.ci}`:""));}else setQuery("");},[value,clients]);
+  useEffect(()=>{const h=e=>{if(wrapRef.current&&!wrapRef.current.contains(e.target))setOpen(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
+  const filtered=clients.filter(c=>c.name.toLowerCase().includes(query.toLowerCase())||(c.ci&&c.ci.toLowerCase().includes(query.toLowerCase())));
+  return(
+    <div ref={wrapRef} style={{position:"relative"}}>
+      <input value={query} onChange={e=>{setQuery(e.target.value);setOpen(true);if(!e.target.value)onChange("");}} onFocus={()=>setOpen(true)} placeholder={placeholder}/>
+      {open&&filtered.length>0&&<div className="dropdown-list" onMouseDown={e=>e.stopPropagation()}>{filtered.map(c=><div key={c.id} className="dropdown-item" onMouseDown={e=>{e.preventDefault();onChange(c.id);setQuery(c.name+(c.ci?` — ${c.ci}`:""));setOpen(false);}}><span style={{fontWeight:500}}>{c.name}</span>{c.ci&&<span style={{color:G.textMuted,marginLeft:8,fontSize:12}}>CI: {c.ci}</span>}{c.phone&&<span style={{color:G.textMuted,marginLeft:8,fontSize:12}}>📞 {c.phone}</span>}</div>)}</div>}
+      {open&&query&&filtered.length===0&&<div className="dropdown-list" onMouseDown={e=>e.stopPropagation()}><div className="dropdown-item" style={{color:G.textMuted}}>Sin resultados</div></div>}
+    </div>
+  );
+}
+
+function ReceiptLink({receipt,label="📎 Ver comprobante"}){
+  if(!receipt)return null;
+  return <span onClick={e=>{e.stopPropagation();downloadReceipt(receipt);}} style={{color:G.blue,cursor:"pointer",marginLeft:8,fontSize:12,textDecoration:"underline"}}>{label}</span>;
+}
+
+// ─── SVG BAR CHART ────────────────────────────────────────────────────────────
+function BarChart({data,color=G.gold,height=160,label=""}){
+  if(!data||data.length===0)return <div style={{color:G.textMuted,fontSize:13,padding:20,textAlign:"center"}}>Sin datos suficientes</div>;
+  const maxVal=Math.max(...data.map(d=>d.v),1);
+  const W=56; const GAP=8; const totalW=data.length*(W+GAP);
+  const barH=h=>Math.max(2,(h/maxVal)*(height-40));
+  return(
+    <div style={{overflowX:"auto"}}>
+      <svg width={Math.max(totalW+20,300)} height={height+30} style={{display:"block"}}>
+        {data.map((d,i)=>{
+          const x=10+i*(W+GAP); const bh=barH(d.v); const y=height-bh-20;
+          return(
+            <g key={i}>
+              <rect x={x} y={y} width={W} height={bh} rx={5} fill={color} opacity={0.85}/>
+              <text x={x+W/2} y={height-4} textAnchor="middle" fontSize={10} fill={G.textMuted}>{d.l}</text>
+              {d.v>0&&<text x={x+W/2} y={y-4} textAnchor="middle" fontSize={10} fill={G.goldLight}>{d.v>999?`${(d.v/1000).toFixed(1)}k`:d.v}</text>}
+            </g>
+          );
+        })}
+        <line x1={10} y1={height-20} x2={Math.max(totalW+10,290)} y2={height-20} stroke={G.cardBorder} strokeWidth={1}/>
+      </svg>
+    </div>
+  );
+}
+
+// ─── ESTADÍSTICAS ─────────────────────────────────────────────────────────────
+function Inicio({clients,sales,payments,inventory}){
+  const[dateFrom,setDateFrom]=useState("");
+  const[dateTo,setDateTo]=useState("");
+  const[chartType,setChartType]=useState("ventas");
+  const[salesView,setSalesView]=useState("pct"); // "pct" | "$"
+  const[clientModal,setClientModal]=useState(null); // cliente seleccionado
+  const handleRange=(f,t)=>{setDateFrom(f);setDateTo(t);};
+
+  const fSales=filterByRange(sales,dateFrom,dateTo,"date");
+  const fPayments=filterByRange(payments,dateFrom,dateTo,"date");
+  const fClients=filterByRange(clients,dateFrom,dateTo,"createdAt");
+  const hasFilter=dateFrom||dateTo;
+
+  const totalDebt=fSales.reduce((a,s)=>a+calcSaleBalance(s,payments).remaining,0);
+  const totalCollected=fPayments.reduce((a,p)=>a+parseFloat(p.amount||0),0);
+  const totalFacturado=fSales.reduce((a,s)=>a+parseFloat(s.total||0),0);
+  const enriched=fSales.map(s=>({...s,...calcSaleBalance(s,payments)}));
+  const pending=enriched.filter(s=>s.status!=="pagado");
+  const recentPayments=[...fPayments].sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,5);
+
+  const months=useMemo(()=>{
+    const arr=[];for(let i=7;i>=0;i--){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);arr.push({key:d.toISOString().slice(0,7),label:fmtMonth(d.toISOString().slice(0,7)+"-01")});}
+    return arr;
+  },[]);
+  const ventasPorMes=months.map(m=>({l:m.label,v:sales.filter(s=>s.date&&s.date.slice(0,7)===m.key).length}));
+  const cobradoPorMes=months.map(m=>({l:m.label,v:Math.round(payments.filter(p=>p.date&&p.date.slice(0,7)===m.key).reduce((a,p)=>a+parseFloat(p.amount||0),0))}));
+  const clientesPorMes=months.map(m=>({l:m.label,v:clients.filter(c=>c.createdAt&&c.createdAt.slice(0,7)===m.key).length}));
+  const chartData=chartType==="ventas"?ventasPorMes:chartType==="cobrado"?cobradoPorMes:clientesPorMes;
+  const chartColor=chartType==="cobrado"?G.green:chartType==="clientes"?G.blue:G.gold;
+
+  // Top Perfumes: agrupa por inventoryId cuando existe, luego por nombre normalizado
+  const perfumeCount={};
+  sales.forEach(s=>{
+    if(!s.perfume)return;
+    // Si tiene inventoryId, usar el nombre del producto del inventario como clave canónica
+    const invItem=s.inventoryId?inventory.find(p=>p.id===s.inventoryId):null;
+    const key=invItem
+      ?`${invItem.name}${invItem.brand?" · "+invItem.brand:""}${invItem.size?" "+invItem.size:""}`
+      :s.perfume.trim().toLowerCase().replace(/\s+/g," ");
+    const label=invItem?`${invItem.name}${invItem.brand?" · "+invItem.brand:""}${invItem.size?" "+invItem.size:""}`:s.perfume;
+    if(!perfumeCount[key])perfumeCount[key]={label,cnt:0};
+    perfumeCount[key].cnt++;
+  });
+  const topPerfumes=Object.values(perfumeCount).sort((a,b)=>b.cnt-a.cnt).slice(0,5);
+  const clientPaid={};
+  payments.forEach(p=>{if(p.clientId)clientPaid[p.clientId]=(clientPaid[p.clientId]||0)+parseFloat(p.amount||0);});
+  const topClientes=Object.entries(clientPaid).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([id,amt])=>({id,name:clients.find(c=>c.id===id)?.name||"—",amt}));
+
+  const dist={pagado:enriched.filter(s=>s.status==="pagado").length,parcial:enriched.filter(s=>s.status==="parcial").length,pendiente:enriched.filter(s=>s.status==="pendiente").length};
+  const distTotal=dist.pagado+dist.parcial+dist.pendiente||1;
+
+  const StatCard=({label,value,sub,color})=>(
+    <Card><div style={{fontSize:12,color:G.textMuted,marginBottom:6}}>{label}</div><div style={{fontFamily:"Cormorant Garamond",fontSize:30,color:color||G.goldLight,fontWeight:600}}>{value}</div>{sub&&<div style={{fontSize:12,color:G.textMuted,marginTop:4}}>{sub}</div>}</Card>
+  );
+  const PctBar=({pct,color})=>(
+    <div style={{flex:1,height:8,background:"rgba(255,255,255,.07)",borderRadius:4,overflow:"hidden"}}>
+      <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:4,transition:"width .6s"}}/>
+    </div>
+  );
+
+  return(
+    <div className="fade-in">
+      <div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight,marginBottom:4}}>✦ Inicio</div>
+      <div style={{color:G.textMuted,fontSize:13,marginBottom:16}}>Vista general de tu perfumería</div>
+      <DateRangeFilter dateFrom={dateFrom} dateTo={dateTo} onChange={handleRange}/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:12,marginBottom:20}}>
+        <StatCard label="💰 Facturado" value={fmt$(totalFacturado)} sub={hasFilter?"en período":"total"} color={G.goldLight}/>
+        <StatCard label="✅ Cobrado" value={fmt$(totalCollected)} sub={hasFilter?"en período":"total"} color={G.green}/>
+        <StatCard label="💸 Por cobrar" value={fmt$(totalDebt)} sub={`${pending.length} venta(s)`} color={G.red}/>
+        <StatCard label="👥 Clientes" value={fClients.length} sub={hasFilter?"en período":"registrados"} color={G.blue}/>
+        <StatCard label="📦 Ventas" value={fSales.length} sub={hasFilter?"en período":"totales"}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+        <Card>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight,marginBottom:14}}>Deudas Pendientes</div>
+          {pending.length===0?<p style={{color:G.textMuted,fontSize:13}}>¡Todo al día! 🎉</p>:pending.slice(0,6).map(s=>{
+            const client=clients.find(c=>c.id===s.clientId);
+            return<div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${G.cardBorder}`}}>
+              <div><div style={{fontSize:13,fontWeight:500}}>{client?.name||"Cliente"}</div><div style={{fontSize:11,color:G.textMuted}}>{s.perfume}</div></div>
+              <div style={{textAlign:"right"}}><div style={{color:G.red,fontWeight:600}}>{fmt$(s.remaining)}</div><Badge status={s.status}/></div>
+            </div>;
+          })}
+        </Card>
+        <Card>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight,marginBottom:14}}>Últimos Abonos</div>
+          {recentPayments.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin abonos aún.</p>:recentPayments.map(p=>{
+            const client=clients.find(c=>c.id===p.clientId);
+            const sale=sales.find(s=>s.id===p.saleId);
+            return<div key={p.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${G.cardBorder}`}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:500}}>{client?.name||"—"}</div>
+                {sale&&<div style={{fontSize:11,color:G.gold}}>🌸 {sale.perfume}</div>}
+                <div style={{fontSize:11,color:G.textMuted}}>{fmtDate(p.date)}</div>
+              </div>
+              <div style={{color:G.green,fontWeight:600,flexShrink:0,marginLeft:8}}>{fmt$(p.amount)}</div>
+            </div>;
+          })}
+        </Card>
+      </div>
+      <Card style={{marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:20,color:G.goldLight}}>Tendencia — Últimos 8 meses</div>
+          <div style={{display:"flex",gap:6}}>
+            {[["ventas","📦 Ventas",G.gold],["cobrado","💵 Cobrado",G.green],["clientes","👥 Clientes",G.blue]].map(([k,l,c])=>(
+              <button key={k} onClick={()=>setChartType(k)} style={{fontSize:12,padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"DM Sans,sans-serif",fontWeight:500,background:chartType===k?c:"rgba(255,255,255,.05)",color:chartType===k?"#0d0d0f":G.textMuted,transition:"all .2s"}}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <BarChart data={chartData} color={chartColor} height={160}/>
+      </Card>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight}}>Estado de Ventas {hasFilter&&<span style={{fontSize:12,color:G.textMuted,fontFamily:"DM Sans"}}>· período</span>}</div>
+            <button onClick={()=>setSalesView(v=>v==="pct"?"$":"pct")} style={{fontSize:11,padding:"3px 10px",borderRadius:20,border:`1px solid ${G.cardBorder}`,background:"rgba(255,255,255,.04)",color:G.textMuted,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>{salesView==="pct"?"Ver en $":"Ver en %"}</button>
+          </div>
+          {fSales.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin ventas en este período.</p>:(
+            <>{[["✅ Pagadas",dist.pagado,G.green,enriched.filter(s=>s.status==="pagado").reduce((a,s)=>a+s.paid,0)],["⚡ Parciales",dist.parcial,G.gold,enriched.filter(s=>s.status==="parcial").reduce((a,s)=>a+s.remaining,0)],["❌ Pendientes",dist.pendiente,G.red,enriched.filter(s=>s.status==="pendiente").reduce((a,s)=>a+s.remaining,0)]].map(([l,n,c,amount])=>(
+              <div key={l} style={{marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:13}}>
+                  <span style={{color:G.textMuted}}>{l}</span>
+                  <span style={{color:c,fontWeight:600}}>{salesView==="pct"?`${n} (${Math.round(n/distTotal*100)}%)`:fmt$(amount)}</span>
+                </div>
+                <PctBar pct={n/distTotal*100} color={c}/>
+              </div>
+            ))}</>
+          )}
+        </Card>
+        <Card>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight,marginBottom:16}}>🌸 Top Perfumes</div>
+          {topPerfumes.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin datos aún.</p>:topPerfumes.map(({label,cnt},i)=>(
+            <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${G.cardBorder}`,fontSize:13}}>
+              <span><span style={{color:G.goldDark,fontWeight:700,marginRight:8}}>#{i+1}</span>{label}</span>
+              <span style={{color:G.gold,fontWeight:600}}>{cnt} venta{cnt!==1?"s":""}</span>
+            </div>
+          ))}
+        </Card>
+      </div>
+      <Card>
+        <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight,marginBottom:16}}>🏆 Top Clientes por Monto Pagado</div>
+        {topClientes.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin datos aún.</p>:(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
+            {topClientes.map(({id,name,amt},i)=>(
+              <div key={name} onClick={()=>{const c=clients.find(x=>x.id===id);if(c)setClientModal(c);}} style={{background:"rgba(255,255,255,.03)",borderRadius:10,padding:"12px 14px",border:`1px solid ${G.cardBorder}`,cursor:"pointer",transition:"border-color .2s"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=G.gold} onMouseLeave={e=>e.currentTarget.style.borderColor=G.cardBorder}>
+                <div style={{fontSize:11,color:G.goldDark,marginBottom:4}}>#{i+1}</div>
+                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>{name}</div>
+                <div style={{color:G.green,fontWeight:700,fontSize:18}}>{fmt$(amt)}</div>
+                <div style={{fontSize:10,color:G.textMuted,marginTop:4}}>Ver detalle →</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Modal detalle cliente */}
+      {clientModal&&(()=>{
+        const cSales=sales.filter(s=>s.clientId===clientModal.id);
+        const cPaid=payments.filter(p=>p.clientId===clientModal.id).reduce((a,p)=>a+parseFloat(p.amount||0),0);
+        const cDebt=cSales.reduce((a,s)=>a+calcSaleBalance(s,payments).remaining,0);
+        return(
+          <Modal title={`👤 ${clientModal.name}`} onClose={()=>setClientModal(null)}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <div style={{background:"rgba(76,175,125,.08)",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:G.textMuted}}>Total pagado</div>
+                <div style={{fontFamily:"Cormorant Garamond",fontSize:22,color:G.green,fontWeight:600}}>{fmt$(cPaid)}</div>
+              </div>
+              <div style={{background:"rgba(224,92,92,.08)",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:G.textMuted}}>Por cobrar</div>
+                <div style={{fontFamily:"Cormorant Garamond",fontSize:22,color:G.red,fontWeight:600}}>{fmt$(cDebt)}</div>
+              </div>
+            </div>
+            {clientModal.phone&&<div style={{fontSize:13,color:G.textMuted,marginBottom:6}}>📞 {clientModal.phone}</div>}
+            {clientModal.ci&&<div style={{fontSize:13,color:G.textMuted,marginBottom:6}}>🪪 {clientModal.ci}</div>}
+            {clientModal.address&&<div style={{fontSize:13,color:G.textMuted,marginBottom:10}}>📍 {clientModal.address}</div>}
+            <div style={{fontWeight:600,fontSize:13,marginBottom:8,color:G.goldLight}}>Compras ({cSales.length})</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto"}}>
+              {cSales.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin compras.</p>:cSales.map(s=>{
+                const bal=calcSaleBalance(s,payments);
+                return<div key={s.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:"rgba(255,255,255,.03)",borderRadius:8,fontSize:13}}>
+                  <div><div style={{fontWeight:500}}>{s.perfume}</div><div style={{fontSize:11,color:G.textMuted}}>{fmtDate(s.date)}</div></div>
+                  <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}><div style={{fontWeight:600,color:G.gold}}>{fmt$(s.total)}</div><Badge status={bal.status}/></div>
+                </div>;
+              })}
+            </div>
+          </Modal>
+        );
+      })()}
+    </div>
+  );
+}
+// ─── CLIENTES ─────────────────────────────────────────────────────────────────
+function Clientes({clients,setClients,sales,payments,inventory,suppliers}){
+  const emptyForm={name:"",ci:"",phone:"",address:"",notes:"",createdAt:today()};
+  const[modal,setModal]=useState(false);const[editModal,setEditModal]=useState(false);const[editId,setEditId]=useState(null);
+  const[form,setForm]=useState(emptyForm);const[search,setSearch]=useState("");const[sort,setSort]=useState("alfa");
+  const[detail,setDetail]=useState(null);const[confirmDel,setConfirmDel]=useState(null);
+  const save=async()=>{if(!form.name.trim())return;const updated=[...clients,{...form,id:uid()}];setClients(updated);await saveData("clients",updated);setForm(emptyForm);setModal(false);};
+  const saveEdit=async()=>{if(!form.name.trim())return;const updated=clients.map(c=>c.id===editId?{...c,...form}:c);setClients(updated);await saveData("clients",updated);if(detail?.id===editId)setDetail(updated.find(c=>c.id===editId));setEditModal(false);setEditId(null);setForm(emptyForm);};
+  const openEdit=(c,e)=>{e.stopPropagation();setEditId(c.id);setForm({name:c.name,ci:c.ci||"",phone:c.phone||"",address:c.address||"",notes:c.notes||"",createdAt:c.createdAt||today()});setEditModal(true);};
+  const doDelete=async()=>{const updated=clients.filter(c=>c.id!==confirmDel);setClients(updated);await saveData("clients",updated);if(detail?.id===confirmDel)setDetail(null);setConfirmDel(null);};
+  let filtered=clients.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())||(c.ci&&c.ci.toLowerCase().includes(search.toLowerCase()))||(c.phone&&c.phone.includes(search)));
+  if(sort==="alfa")filtered=[...filtered].sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sort==="compras")filtered=[...filtered].sort((a,b)=>sales.filter(s=>s.clientId===b.id).length-sales.filter(s=>s.clientId===a.id).length);
+  else if(sort==="pagado")filtered=[...filtered].sort((a,b)=>{const pA=payments.filter(p=>p.clientId===a.id).reduce((s,p)=>s+parseFloat(p.amount||0),0);const pB=payments.filter(p=>p.clientId===b.id).reduce((s,p)=>s+parseFloat(p.amount||0),0);return pB-pA;});
+  const CFields=()=>(
+    <>
+      <Field label="Nombre *"><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Ej. María López"/></Field>
+      <Field label="CI (Cédula)"><input value={form.ci} onChange={e=>setForm(f=>({...f,ci:e.target.value}))} placeholder="Ej. V-12345678"/></Field>
+      <Field label="Teléfono"><input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="+58 412 000 0000"/></Field>
+      <Field label="Dirección"><input value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} placeholder="Ej. Av. Principal, Casa #5"/></Field>
+      <Field label="📅 Fecha de registro"><input type="date" value={form.createdAt||today()} onChange={e=>setForm(f=>({...f,createdAt:e.target.value}))}/></Field>
+      <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+    </>
+  );
+  return(
+    <div className="fade-in">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
+        <div><div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight}}>Clientes</div><div style={{color:G.textMuted,fontSize:13}}>{clients.length} cliente(s) registrado(s)</div></div>
+        <Btn onClick={()=>{setForm(emptyForm);setModal(true);}}>+ Nuevo Cliente</Btn>
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <input placeholder="🔍 Buscar por nombre, CI o teléfono..." value={search} onChange={e=>setSearch(e.target.value)} style={{flex:"1 1 200px",maxWidth:340}}/>
+        <select value={sort} onChange={e=>setSort(e.target.value)} style={{flex:"0 0 auto",width:"auto",paddingRight:28}}>
+          <option value="alfa">A → Z</option>
+          <option value="compras">Mayor cantidad de compras</option>
+          <option value="pagado">Mayor monto pagado</option>
+        </select>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}}>
+        {filtered.map(c=>{
+          const cs=sales.filter(s=>s.clientId===c.id);const debt=cs.reduce((a,s)=>a+calcSaleBalance(s,payments).remaining,0);const totalPaid=payments.filter(p=>p.clientId===c.id).reduce((a,p)=>a+parseFloat(p.amount||0),0);
+          return(
+            <Card key={c.id} onClick={()=>setDetail(c)} style={{cursor:"pointer",borderColor:debt>0?"rgba(224,92,92,.3)":G.cardBorder}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{width:40,height:40,borderRadius:"50%",background:`linear-gradient(135deg,${G.goldDark},${G.gold})`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#0d0d0f",fontSize:16}}>{c.name[0].toUpperCase()}</div>
+                <div style={{display:"flex",gap:6}}><Btn variant="edit" size="sm" onClick={e=>openEdit(c,e)}>✏️</Btn><Btn variant="danger" size="sm" onClick={e=>{e.stopPropagation();setConfirmDel(c.id);}}>🗑️</Btn></div>
+              </div>
+              <div style={{fontWeight:600,marginTop:10,fontSize:15}}>{c.name}</div>
+              {c.ci&&<div style={{fontSize:12,color:G.textMuted,marginTop:2}}>🪪 CI: {c.ci}</div>}
+              {c.phone&&<div style={{fontSize:12,color:G.textMuted,marginTop:2}}>📞 {c.phone}</div>}
+              {c.address&&<div style={{fontSize:12,color:G.textMuted,marginTop:2}}>📍 {c.address}</div>}
+              <div className="gold-line"/>
+              <div style={{fontSize:12,color:G.textMuted}}>{cs.length} compra(s) · {fmt$(totalPaid)} pagado</div>
+              <div style={{fontSize:12,marginTop:4}}>{debt>0?<span style={{color:G.red,fontWeight:600}}>Debe: {fmt$(debt)}</span>:<span style={{color:G.green}}>Al día ✓</span>}</div>
+            </Card>
+          );
+        })}
+        {filtered.length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin clientes que coincidan.</p>}
+      </div>
+      {modal&&<Modal title="Nuevo Cliente" onClose={()=>setModal(false)}><CFields/><Btn onClick={save} style={{width:"100%"}}>Guardar Cliente</Btn></Modal>}
+      {editModal&&<Modal title="Editar Cliente" onClose={()=>{setEditModal(false);setEditId(null);}}><CFields/><Btn onClick={saveEdit} style={{width:"100%"}}>Guardar Cambios</Btn></Modal>}
+      {confirmDel&&<ConfirmModal message="¿Eliminar este cliente?" subtext="El cliente será eliminado. Su historial se mantendrá." onConfirm={doDelete} onCancel={()=>setConfirmDel(null)}/>}
+      {detail&&(
+        <Modal title={detail.name} onClose={()=>setDetail(null)}>
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:16,padding:"12px 14px",background:"rgba(255,255,255,.03)",borderRadius:10}}>
+            {detail.ci&&<div style={{fontSize:13}}>🪪 CI: <strong>{detail.ci}</strong></div>}
+            {detail.phone&&<div style={{fontSize:13}}>📞 <strong>{detail.phone}</strong></div>}
+            {detail.address&&<div style={{fontSize:13}}>📍 <strong>{detail.address}</strong></div>}
+            {detail.createdAt&&<div style={{fontSize:13}}>📅 Desde: <strong>{fmtDate(detail.createdAt)}</strong></div>}
+          </div>
+          {detail.notes&&<p style={{fontSize:13,color:G.textMuted,marginBottom:16}}>{detail.notes}</p>}
+          <div style={{fontWeight:600,marginBottom:10,color:G.gold}}>Historial de Compras</div>
+          {sales.filter(s=>s.clientId===detail.id).map(s=>{
+            const bal=calcSaleBalance(s,payments);
+            const invItem=inventory?.find(p=>p.id===s.inventoryId);
+            const supplier=invItem&&suppliers?.find(sup=>sup.id===invItem.supplierId);
+            return<div key={s.id} style={{padding:"10px 0",borderBottom:`1px solid ${G.cardBorder}`}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontWeight:500}}>🌸 {s.perfume}</span><Badge status={bal.status}/></div>
+              {supplier&&<div style={{fontSize:11,color:G.blue,marginTop:2}}>🏪 {supplier.name}{supplier.phone&&` · ${supplier.phone}`}</div>}
+              <div style={{fontSize:12,color:G.textMuted,marginTop:4}}>{fmtDate(s.date)} · Total: {fmt$(s.total)} · Pagado: <span style={{color:G.green}}>{fmt$(bal.paid)}</span> · Resta: <span style={{color:bal.remaining>0?G.red:G.green}}>{fmt$(bal.remaining)}</span></div>
+              {payments.filter(p=>p.saleId===s.id).map(p=><div key={p.id} style={{fontSize:12,color:G.textMuted,marginLeft:12,marginTop:4}}>└ {p.isInitial?"⭐ Pago inicial":`Abono ${fmtDate(p.date)}`}: <span style={{color:G.green}}>{fmt$(p.amount)}</span><ReceiptLink receipt={p.receipt}/></div>)}
+            </div>;
+          })}
+          {sales.filter(s=>s.clientId===detail.id).length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin compras registradas.</p>}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── VENTAS ───────────────────────────────────────────────────────────────────
+function Ventas({clients,sales,setSales,payments,setPayments,inventory,setInventory,suppliers}){
+  const emptyForm={clientId:"",perfume:"",total:"",initialPayment:"",date:today(),notes:"",receipt:"",inventoryId:""};
+  const[modal,setModal]=useState(false);const[editModal,setEditModal]=useState(false);const[editId,setEditId]=useState(null);
+  const[form,setForm]=useState(emptyForm);const[imgPreview,setImgPreview]=useState(null);
+  const[filter,setFilter]=useState("todos");const[search,setSearch]=useState("");
+  const[confirmDel,setConfirmDel]=useState(null);const[detailClient,setDetailClient]=useState(null);
+  const[invMode,setInvMode]=useState(false);const[invSearch,setInvSearch]=useState("");
+  const fileRef=useRef();const editFileRef=useRef();
+
+  const handleImage=(e,setter)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>setter(ev.target.result);reader.readAsDataURL(file);};
+
+  const pickFromInventory=(item)=>{
+    setForm(f=>({...f,perfume:`${item.name}${item.size?" "+item.size:""}`,total:item.salePrice||"",inventoryId:item.id}));
+    setInvSearch("");
+  };
+
+  const save=async()=>{
+    if(!form.clientId||!form.perfume||!form.total)return alert("Completa: Cliente, Perfume y Total.");
+    const saleId=uid();const updatedSales=[...sales,{...form,id:saleId}];setSales(updatedSales);await saveData("sales",updatedSales);
+    if(form.initialPayment&&parseFloat(form.initialPayment)>0){const ip={id:uid(),saleId,clientId:form.clientId,amount:form.initialPayment,date:form.date,notes:"Pago inicial",isInitial:true,receipt:form.receipt,createdAt:now()};const up=[...payments,ip];setPayments(up);await saveData("payments",up);}
+    // Descontar stock si se seleccionó producto del inventario
+    if(form.inventoryId){
+      const updatedInv=inventory.map(p=>p.id===form.inventoryId?{...p,stock:Math.max(0,(parseInt(p.stock)||0)-1)}:p);
+      setInventory(updatedInv);await saveData("inventory",updatedInv);
+    }
+    setForm(emptyForm);setImgPreview(null);setModal(false);setInvMode(false);
+  };
+  const openEdit=(s,e)=>{e.stopPropagation();setEditId(s.id);setForm({clientId:s.clientId,perfume:s.perfume,total:s.total,initialPayment:"",date:s.date,notes:s.notes||"",receipt:s.receipt||"",inventoryId:s.inventoryId||""});setImgPreview(s.receipt||null);setInvMode(false);setInvSearch("");setEditModal(true);};
+  const saveEdit=async()=>{if(!form.perfume||!form.total)return alert("Completa Perfume y Total.");const updated=sales.map(s=>s.id===editId?{...s,perfume:form.perfume,total:form.total,date:form.date,notes:form.notes,receipt:form.receipt}:s);setSales(updated);await saveData("sales",updated);setEditModal(false);setEditId(null);setForm(emptyForm);setImgPreview(null);};
+  const doDelete=async()=>{
+    const saleToDelete=sales.find(s=>s.id===confirmDel);
+    const updatedSales=sales.filter(s=>s.id!==confirmDel);
+    const updatedPayments=payments.filter(p=>p.saleId!==confirmDel);
+    setSales(updatedSales);await saveData("sales",updatedSales);
+    setPayments(updatedPayments);await saveData("payments",updatedPayments);
+    // Devolver stock si la venta estaba vinculada a un producto del inventario
+    if(saleToDelete?.inventoryId){
+      const updatedInv=inventory.map(p=>p.id===saleToDelete.inventoryId?{...p,stock:(parseInt(p.stock)||0)+1}:p);
+      setInventory(updatedInv);await saveData("inventory",updatedInv);
+    }
+    setConfirmDel(null);
+  };
+
+  const enriched=sales.map(s=>({...s,...calcSaleBalance(s,payments),client:clients.find(c=>c.id===s.clientId)}));
+  let filtered2=filter==="todos"?enriched:enriched.filter(s=>s.status===filter);
+  if(search.trim()){const q=search.toLowerCase();filtered2=filtered2.filter(s=>s.client?.name.toLowerCase().includes(q)||(s.client?.ci&&s.client.ci.toLowerCase().includes(q))||(s.client?.phone&&s.client.phone.includes(q))||s.perfume.toLowerCase().includes(q));}
+  const sorted=[...filtered2].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const initNum=parseFloat(form.initialPayment||0),totalNum=parseFloat(form.total||0);
+  const invFiltered=inventory.filter(p=>p.name.toLowerCase().includes(invSearch.toLowerCase())||(p.brand&&p.brand.toLowerCase().includes(invSearch.toLowerCase())));
+
+  return(
+    <div className="fade-in">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
+        <div><div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight}}>Ventas a Crédito</div><div style={{color:G.textMuted,fontSize:13}}>{sales.length} venta(s) registrada(s)</div></div>
+        <Btn onClick={()=>{setForm(emptyForm);setImgPreview(null);setModal(true);setInvMode(inventory.length>0);setInvSearch("");}}>+ Nueva Venta</Btn>
+      </div>
+      <input placeholder="🔍 Buscar por cliente, CI, teléfono o perfume..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:12}}/>
+      <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+        {["todos","pendiente","parcial","pagado"].map(f=><Btn key={f} variant={filter===f?"gold":"ghost"} size="sm" onClick={()=>setFilter(f)} style={{textTransform:"capitalize"}}>{f}</Btn>)}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {sorted.map(s=>(
+          <Card key={s.id}>
+            <div style={{display:"flex",gap:8,justifyContent:"space-between"}}>
+              <div style={{flex:"1 1 0",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <div style={{fontWeight:600,fontSize:15}}>{s.client?.name||"Cliente eliminado"}</div>
+                  {s.client&&<Btn variant="ghost" size="sm" onClick={()=>setDetailClient(s.client)} style={{fontSize:11,padding:"3px 8px"}}>Ver más</Btn>}
+                </div>
+                {s.client?.ci&&<div style={{fontSize:12,color:G.textMuted}}>🪪 {s.client.ci}</div>}
+                <div style={{color:G.gold,fontSize:14,marginTop:2}}>🌸 {s.perfume}</div>
+                {(()=>{const inv=inventory?.find(p=>p.id===s.inventoryId);const sup=inv&&suppliers?.find(x=>x.id===inv.supplierId);return sup?<div style={{fontSize:11,color:G.blue,marginTop:2}}>🏪 {sup.name}{sup.phone&&` · ${sup.phone}`}</div>:null;})()}
+                <div style={{fontSize:12,color:G.textMuted,marginTop:4}}>📅 {fmtDate(s.date)}</div>
+                {s.notes&&<div style={{fontSize:12,color:G.textMuted,marginTop:2,wordBreak:"break-word"}}>📝 {s.notes}</div>}
+              </div>
+              <div style={{flex:"0 0 auto",textAlign:"right",minWidth:120}}>
+                <Badge status={s.status}/>
+                <div style={{marginTop:8}}><span style={{fontSize:12,color:G.textMuted}}>Total: </span><span style={{fontWeight:600}}>{fmt$(s.total)}</span></div>
+                <div><span style={{fontSize:12,color:G.textMuted}}>Pagado: </span><span style={{color:G.green}}>{fmt$(s.paid)}</span></div>
+                <div><span style={{fontSize:12,color:G.textMuted}}>Resta: </span><span style={{color:s.remaining>0?G.red:G.green,fontWeight:700}}>{fmt$(s.remaining)}</span></div>
+                <div style={{display:"flex",gap:6,marginTop:8,justifyContent:"flex-end"}}>
+                  <Btn variant="edit" size="sm" onClick={e=>openEdit(s,e)}>✏️</Btn>
+                  <Btn variant="danger" size="sm" onClick={()=>setConfirmDel(s.id)}>🗑️</Btn>
+                </div>
+              </div>
+            </div>
+            <div style={{marginTop:12,background:"#1e1e24",borderRadius:4,height:5,overflow:"hidden"}}><div style={{width:`${Math.min(100,(s.paid/Math.max(s.total,1))*100)}%`,height:"100%",background:`linear-gradient(90deg,${G.goldDark},${G.gold})`,borderRadius:4,transition:"width .5s"}}/></div>
+            {payments.filter(p=>p.saleId===s.id).map(p=><div key={p.id} style={{fontSize:12,color:G.textMuted,marginTop:6,paddingLeft:8,borderLeft:`2px solid ${G.goldDark}`}}>{p.isInitial?"⭐ Pago inicial":`Abono ${fmtDate(p.date)}`}: <span style={{color:G.green,fontWeight:600}}>{fmt$(p.amount)}</span><ReceiptLink receipt={p.receipt}/>{!p.isInitial&&p.notes&&<span> · {p.notes}</span>}</div>)}
+            {s.receipt&&payments.filter(p=>p.saleId===s.id&&p.isInitial).length===0&&<div style={{fontSize:12,color:G.textMuted,marginTop:6,paddingLeft:8,borderLeft:`2px solid ${G.goldDark}`}}>📎 Comprobante: <ReceiptLink receipt={s.receipt} label="Descargar"/></div>}
+          </Card>
+        ))}
+        {sorted.length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin ventas en esta categoría.</p>}
+      </div>
+      {confirmDel&&<ConfirmModal message="¿Eliminar esta venta?" subtext="Se eliminará la venta y todos sus abonos relacionados." onConfirm={doDelete} onCancel={()=>setConfirmDel(null)}/>}
+      {detailClient&&<Modal title={detailClient.name} onClose={()=>setDetailClient(null)}><div style={{display:"flex",flexDirection:"column",gap:10}}>{detailClient.ci&&<div style={{fontSize:14}}>🪪 CI: <strong>{detailClient.ci}</strong></div>}{detailClient.phone&&<div style={{fontSize:14}}>📞 Teléfono: <strong>{detailClient.phone}</strong></div>}{detailClient.address&&<div style={{fontSize:14}}>📍 Dirección: <strong>{detailClient.address}</strong></div>}{detailClient.notes&&<div style={{fontSize:13,color:G.textMuted,marginTop:4}}>{detailClient.notes}</div>}</div></Modal>}
+      {modal&&(
+        <Modal title="Nueva Venta a Crédito" onClose={()=>{setModal(false);setInvMode(false);setInvSearch("");}} wide>
+          {/* 1. Cliente */}
+          <Field label="Cliente *"><ClienteSearch clients={clients} value={form.clientId} onChange={id=>setForm({...form,clientId:id})}/></Field>
+
+          {/* 2. Inventario */}
+          {inventory.length>0&&(
+            <div style={{marginBottom:14,background:"rgba(255,255,255,.02)",borderRadius:10,border:`1px solid ${invMode?G.gold:G.cardBorder}`,padding:12,transition:"border-color .2s"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:invMode?12:0}}>
+                <span style={{fontSize:13,color:G.gold,fontWeight:500}}>📦 Perfume del inventario {form.perfume&&<span style={{color:G.green,fontSize:12}}>✓ {form.perfume}</span>}</span>
+                <button onClick={()=>setInvMode(v=>!v)} style={{fontSize:12,padding:"4px 10px",borderRadius:6,border:`1px solid ${G.cardBorder}`,background:"transparent",color:G.textMuted,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>{invMode?"▲ Cerrar":"▼ Buscar"}</button>
+              </div>
+              {invMode&&(
+                <>
+                  <input placeholder="🔍 Buscar producto..." value={invSearch} onChange={e=>setInvSearch(e.target.value)} style={{marginBottom:10,fontSize:13}}/>
+                  <div style={{maxHeight:200,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
+                    {invFiltered.map(item=>(
+                      <div key={item.id} onClick={()=>{pickFromInventory(item);setInvMode(false);}} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${form.perfume===`${item.name}${item.size?" "+item.size:""}`?G.gold:G.cardBorder}`,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:form.perfume===`${item.name}${item.size?" "+item.size:""}`?"rgba(201,168,76,.1)":"transparent",transition:"all .15s"}} onMouseEnter={e=>e.currentTarget.style.background="rgba(201,168,76,.1)"} onMouseLeave={e=>{if(form.perfume!==`${item.name}${item.size?" "+item.size:""}`)e.currentTarget.style.background="transparent";}}>
+                        <div><div style={{fontWeight:500,fontSize:13}}>{item.name}{item.size&&` · ${item.size}`}</div><div style={{fontSize:11,color:G.textMuted}}>{item.brand&&`${item.brand} · `}{suppliers?.find(s=>s.id===item.supplierId)&&<span style={{color:G.blue}}>🏪 {suppliers.find(s=>s.id===item.supplierId).name} · </span>}Stock: {item.stock||0}</div></div>
+                        <div style={{color:G.gold,fontWeight:600,fontSize:13}}>{item.salePrice?fmt$(item.salePrice):""}</div>
+                      </div>
+                    ))}
+                    {invFiltered.length===0&&<div style={{color:G.textMuted,fontSize:13,textAlign:"center",padding:10}}>Sin productos</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* 3. Total editable (autocompleta desde inventario pero se puede cambiar) */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Total $ * (editable)">
+              <input type="number" onWheel={e=>e.target.blur()} value={form.total} onChange={e=>setForm({...form,total:e.target.value})} placeholder="0.00"/>
+              {form.total&&form.perfume&&<div style={{fontSize:11,color:G.textMuted,marginTop:3}}>💡 Edita si aplicaste descuento</div>}
+            </Field>
+            <Field label="Pago Inicial $ (opcional)"><input type="number" onWheel={e=>e.target.blur()} value={form.initialPayment} onChange={e=>setForm({...form,initialPayment:e.target.value})} placeholder="0.00"/></Field>
+          </div>
+          {totalNum>0&&<div style={{background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.2)",borderRadius:10,padding:"12px 14px",marginBottom:14,fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textMuted}}>Total venta:</span><span style={{fontWeight:600}}>{fmt$(totalNum)}</span></div>
+            {initNum>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:4}}><span style={{color:G.textMuted}}>Pago inicial:</span><span style={{color:G.green}}>− {fmt$(initNum)}</span></div>}
+            <div className="gold-line"/>
+            <div style={{display:"flex",justifyContent:"space-between",fontWeight:700}}><span>Queda pendiente:</span><span style={{color:Math.max(0,totalNum-initNum)>0?G.red:G.green}}>{fmt$(Math.max(0,totalNum-initNum))}</span></div>
+          </div>}
+          <Field label="Fecha de Venta"><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+          <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2} placeholder="Ej. Paga el 15 de cada mes..."/></Field>
+          <Field label="📎 Comprobante (opcional)">
+            <input ref={fileRef} type="file" accept="image/*" onChange={e=>handleImage(e,url=>{setForm(f=>({...f,receipt:url}));setImgPreview(url);})} style={{display:"none"}}/>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <Btn variant="ghost" onClick={()=>fileRef.current.click()}>📷 Subir imagen</Btn>
+              {imgPreview&&<div style={{position:"relative"}}><img src={imgPreview} alt="preview" style={{width:54,height:54,objectFit:"cover",borderRadius:8}}/><button onClick={()=>{setImgPreview(null);setForm(f=>({...f,receipt:""}));}} style={{position:"absolute",top:-6,right:-6,background:G.red,border:"none",borderRadius:"50%",width:18,height:18,color:"#fff",fontSize:10,cursor:"pointer"}}>✕</button></div>}
+            </div>
+          </Field>
+          <Btn onClick={save} style={{width:"100%"}}>Registrar Venta</Btn>
+        </Modal>
+      )}
+      {editModal&&(
+        <Modal title="Editar Venta" onClose={()=>{setEditModal(false);setEditId(null);setImgPreview(null);setInvMode(false);setInvSearch("");}} wide>
+          {/* Selector de inventario */}
+          {inventory.length>0&&(
+            <div style={{marginBottom:14,background:"rgba(255,255,255,.02)",borderRadius:10,border:`1px solid ${invMode?G.gold:G.cardBorder}`,padding:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:invMode?12:0}}>
+                <span style={{fontSize:13,color:G.gold,fontWeight:500}}>📦 Perfume del inventario {form.perfume&&<span style={{color:G.green,fontSize:12}}>✓ {form.perfume}</span>}</span>
+                <button onClick={()=>setInvMode(v=>!v)} style={{fontSize:12,padding:"4px 10px",borderRadius:6,border:`1px solid ${G.cardBorder}`,background:"transparent",color:G.textMuted,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>{invMode?"▲ Cerrar":"▼ Cambiar"}</button>
+              </div>
+              {invMode&&(
+                <>
+                  <input placeholder="🔍 Buscar producto..." value={invSearch} onChange={e=>setInvSearch(e.target.value)} style={{marginBottom:10,fontSize:13}}/>
+                  <div style={{maxHeight:180,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
+                    {invFiltered.map(item=>(
+                      <div key={item.id} onClick={()=>{pickFromInventory(item);setInvMode(false);}} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${form.inventoryId===item.id?G.gold:G.cardBorder}`,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:form.inventoryId===item.id?"rgba(201,168,76,.1)":"transparent",transition:"all .15s"}} onMouseEnter={e=>e.currentTarget.style.background="rgba(201,168,76,.1)"} onMouseLeave={e=>{if(form.inventoryId!==item.id)e.currentTarget.style.background="transparent";}}>
+                        <div>
+                          <div style={{fontWeight:500,fontSize:13}}>{item.name}{item.size&&` · ${item.size}`}</div>
+                          <div style={{fontSize:11,color:G.textMuted}}>{item.brand&&`${item.brand} · `}{suppliers?.find(s=>s.id===item.supplierId)&&<span style={{color:G.blue}}>🏪 {suppliers.find(s=>s.id===item.supplierId).name} · </span>}Stock: {item.stock||0}</div>
+                        </div>
+                        <div style={{color:G.gold,fontWeight:600,fontSize:13}}>{item.salePrice?fmt$(item.salePrice):""}</div>
+                      </div>
+                    ))}
+                    {invFiltered.length===0&&<div style={{color:G.textMuted,fontSize:13,textAlign:"center",padding:10}}>Sin productos</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <Field label="Total $ * (editable)">
+            <input type="number" onWheel={e=>e.target.blur()} value={form.total} onChange={e=>setForm({...form,total:e.target.value})} placeholder="0.00"/>
+            <div style={{fontSize:11,color:G.textMuted,marginTop:3}}>💡 Edita si aplicaste un descuento</div>
+          </Field>
+          <Field label="Fecha de Venta"><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+          <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2} placeholder="Notas..."/></Field>
+          <Field label="📎 Comprobante">
+            <input ref={editFileRef} type="file" accept="image/*" onChange={e=>handleImage(e,url=>{setForm(f=>({...f,receipt:url}));setImgPreview(url);})} style={{display:"none"}}/>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <Btn variant="ghost" onClick={()=>editFileRef.current.click()}>📷 {imgPreview?"Cambiar":"Subir imagen"}</Btn>
+              {imgPreview&&<div style={{position:"relative"}}><img src={imgPreview} alt="preview" style={{width:54,height:54,objectFit:"cover",borderRadius:8}}/><button onClick={()=>{setImgPreview(null);setForm(f=>({...f,receipt:""}));}} style={{position:"absolute",top:-6,right:-6,background:G.red,border:"none",borderRadius:"50%",width:18,height:18,color:"#fff",fontSize:10,cursor:"pointer"}}>✕</button></div>}
+            </div>
+          </Field>
+          <Btn onClick={saveEdit} style={{width:"100%"}}>Guardar Cambios</Btn>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── ABONOS ───────────────────────────────────────────────────────────────────
+function Abonos({clients,sales,payments,setPayments,inventory,suppliers}){
+  const emptyForm={saleId:"",amount:"",date:today(),notes:"",receipt:""};
+  const[modal,setModal]=useState(false);const[form,setForm]=useState(emptyForm);const[imgPreview,setImgPreview]=useState(null);
+  const[saleSearch,setSaleSearch]=useState("");const[pendSearch,setPendSearch]=useState("");const[detailClient,setDetailClient]=useState(null);
+  const fileRef=useRef();
+  const pendingSales=sales.map(s=>({...s,...calcSaleBalance(s,payments),client:clients.find(c=>c.id===s.clientId)})).filter(s=>s.status!=="pagado");
+  const displayPending=pendingSales.filter(s=>{const q=pendSearch.toLowerCase();return !q||s.client?.name.toLowerCase().includes(q)||(s.client?.ci&&s.client.ci.toLowerCase().includes(q))||(s.client?.phone&&s.client.phone.includes(q))||s.perfume.toLowerCase().includes(q);});
+  const filteredPending=pendingSales.filter(s=>{const q=saleSearch.toLowerCase();return !q||s.client?.name.toLowerCase().includes(q)||(s.client?.ci&&s.client.ci.toLowerCase().includes(q))||s.perfume.toLowerCase().includes(q);});
+  const handleImage=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>{setForm(f=>({...f,receipt:ev.target.result}));setImgPreview(ev.target.result);};reader.readAsDataURL(file);};
+  const save=async()=>{if(!form.saleId||!form.amount)return alert("Selecciona una venta e ingresa el monto.");const sale=sales.find(s=>s.id===form.saleId);const updated=[...payments,{...form,id:uid(),clientId:sale.clientId,createdAt:now()}];setPayments(updated);await saveData("payments",updated);setForm(emptyForm);setImgPreview(null);setSaleSearch("");setModal(false);};
+  const history=[...payments].sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).map(p=>({...p,client:clients.find(c=>c.id===p.clientId),sale:sales.find(s=>s.id===p.saleId)}));
+  return(
+    <div className="fade-in">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
+        <div><div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight}}>Abonos</div><div style={{color:G.textMuted,fontSize:13}}>{pendingSales.length} venta(s) pendiente(s) de cobro</div></div>
+        <Btn onClick={()=>{setForm(emptyForm);setSaleSearch("");setModal(true);}}>+ Registrar Abono</Btn>
+      </div>
+      {pendingSales.length>0&&(
+        <div style={{marginBottom:28}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+            <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.gold}}>⚠ Pendiente de Cobro</div>
+            <input placeholder="🔍 Buscar..." value={pendSearch} onChange={e=>setPendSearch(e.target.value)} style={{maxWidth:280,fontSize:13,padding:"7px 12px"}}/>
+          </div>
+          <div style={{maxHeight:520,overflowY:"auto",paddingRight:4}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:10}}>
+              {displayPending.map(s=>(
+                <Card key={s.id} style={{borderColor:s.status==="parcial"?"rgba(201,168,76,.4)":"rgba(224,92,92,.4)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div><div style={{fontWeight:600,fontSize:14}}>{s.client?.name||"—"}</div>{s.client?.ci&&<div style={{fontSize:11,color:G.textMuted}}>🪪 {s.client.ci}</div>}{s.client?.phone&&<div style={{fontSize:11,color:G.textMuted}}>📞 {s.client.phone}</div>}</div>
+                    {s.client&&<Btn variant="ghost" size="sm" onClick={()=>setDetailClient(s.client)} style={{fontSize:11,padding:"3px 8px"}}>Ver más</Btn>}
+                  </div>
+                  <div className="gold-line"/>
+                  <div style={{fontSize:13,color:G.gold,marginBottom:6}}>🌸 {s.perfume}</div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span style={{color:G.textMuted}}>Resta:</span><span style={{color:G.red,fontWeight:700}}>{fmt$(s.remaining)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:G.textMuted,marginTop:2}}><span>Pagado: {fmt$(s.paid)}</span><span>Total: {fmt$(s.total)}</span></div>
+                  <div style={{marginTop:8,background:"#1e1e24",borderRadius:4,height:4}}><div style={{width:`${Math.min(100,(s.paid/Math.max(s.total,1))*100)}%`,height:"100%",background:`linear-gradient(90deg,${G.goldDark},${G.gold})`,borderRadius:4}}/></div>
+                  {payments.filter(p=>p.saleId===s.id).length>0&&<div style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${G.cardBorder}`}}>{payments.filter(p=>p.saleId===s.id).map(p=><div key={p.id} style={{fontSize:11,color:G.textMuted,paddingLeft:8,borderLeft:`2px solid ${G.goldDark}`,marginBottom:4}}>{p.isInitial?"⭐ Pago inicial":`Abono ${fmtDate(p.date)}`}: <span style={{color:G.green,fontWeight:600}}>{fmt$(p.amount)}</span><ReceiptLink receipt={p.receipt} label="📎 Ver"/>{p.notes&&!p.isInitial&&<span style={{marginLeft:4}}>· {p.notes}</span>}</div>)}</div>}
+                  <Btn variant="success" size="sm" style={{width:"100%",marginTop:10}} onClick={()=>{setForm(f=>({...f,saleId:s.id}));setSaleSearch(s.client?.name||"");setModal(true);}}>💳 Abonar</Btn>
+                </Card>
+              ))}
+              {displayPending.length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin resultados.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.gold,marginBottom:12}}>Historial de Abonos <span style={{fontSize:13,color:G.textMuted,fontFamily:"DM Sans"}}>({history.length})</span></div>
+      <div style={{maxHeight:500,overflowY:"auto",paddingRight:4,display:"flex",flexDirection:"column",gap:8}}>
+        {history.map(p=>(
+          <Card key={p.id} style={{padding:"12px 16px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div>
+                <div style={{fontWeight:500}}>{p.client?.name||"—"}</div>
+                <div style={{fontSize:12,color:G.textMuted}}>🌸 {p.sale?.perfume||"Venta eliminada"} · {fmtDate(p.date)}{p.isInitial&&<span style={{color:G.gold,marginLeft:6}}>⭐ Pago inicial</span>}</div>
+                {!p.isInitial&&p.notes&&<div style={{fontSize:12,color:G.textMuted}}>{p.notes}</div>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                {p.receipt&&<img src={p.receipt} alt="comprobante" onClick={()=>downloadReceipt(p.receipt)} title="Clic para descargar" style={{width:40,height:40,objectFit:"cover",borderRadius:6,border:`1px solid ${G.cardBorder}`,cursor:"pointer"}}/>}
+                <span style={{color:G.green,fontWeight:700,fontSize:18}}>{fmt$(p.amount)}</span>
+              </div>
+            </div>
+          </Card>
+        ))}
+        {history.length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin abonos registrados aún.</p>}
+      </div>
+      {detailClient&&<Modal title={detailClient.name} onClose={()=>setDetailClient(null)}><div style={{display:"flex",flexDirection:"column",gap:10}}>{detailClient.ci&&<div style={{fontSize:14}}>🪪 CI: <strong>{detailClient.ci}</strong></div>}{detailClient.phone&&<div style={{fontSize:14}}>📞 <strong>{detailClient.phone}</strong></div>}{detailClient.address&&<div style={{fontSize:14}}>📍 <strong>{detailClient.address}</strong></div>}</div></Modal>}
+      {modal&&(
+        <Modal title="Registrar Abono" onClose={()=>{setModal(false);setImgPreview(null);setSaleSearch("");}} wide>
+          <Field label="🔍 Buscar venta (nombre, CI o perfume)"><input value={saleSearch} onChange={e=>{setSaleSearch(e.target.value);setForm(f=>({...f,saleId:""}));}} placeholder="Escribe para filtrar..."/></Field>
+          <div style={{marginBottom:14,maxHeight:210,overflowY:"auto",border:`1px solid ${G.cardBorder}`,borderRadius:10}}>
+            {filteredPending.length===0?<div style={{padding:"12px 14px",color:G.textMuted,fontSize:13}}>Sin ventas pendientes.</div>:filteredPending.map(s=>(
+              <div key={s.id} onClick={()=>setForm(f=>({...f,saleId:s.id}))} style={{padding:"10px 14px",cursor:"pointer",borderBottom:`1px solid ${G.cardBorder}`,background:form.saleId===s.id?"rgba(201,168,76,.15)":"transparent",borderLeft:form.saleId===s.id?`3px solid ${G.gold}`:"3px solid transparent",transition:"all .15s"}}>
+                <div style={{fontWeight:500,fontSize:13}}>{s.client?.name||"—"}</div>
+                <div style={{fontSize:12,color:G.textMuted}}>🌸 {s.perfume}{s.client?.ci&&<span style={{marginLeft:6}}>· 🪪 {s.client.ci}</span>}
+                  {(()=>{const inv=inventory?.find(p=>p.id===s.inventoryId);const sup=inv&&suppliers?.find(x=>x.id===inv.supplierId);return sup?<span style={{color:G.blue,marginLeft:6}}>· 🏪 {sup.name}</span>:null;})()}
+                  <span style={{marginLeft:6,color:G.red,fontWeight:600}}>· Resta: {fmt$(s.remaining)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Field label="Monto del Abono $ *"><input type="number" onWheel={e=>e.target.blur()} value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="0.00"/></Field>
+          <Field label="Fecha"><input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+          <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2} placeholder="Ej. Transferencia Banesco..."/></Field>
+          <Field label="📎 Comprobante (foto)">
+            <input ref={fileRef} type="file" accept="image/*" onChange={handleImage} style={{display:"none"}}/>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}><Btn variant="ghost" onClick={()=>fileRef.current.click()}>📷 Subir imagen</Btn>{imgPreview&&<img src={imgPreview} alt="preview" style={{width:50,height:50,objectFit:"cover",borderRadius:6}}/>}</div>
+          </Field>
+          <Btn onClick={save} disabled={!form.saleId||!form.amount} style={{width:"100%"}}>{!form.saleId?"Selecciona una venta arriba":"Guardar Abono"}</Btn>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── INVENTARIO ────────────────────────────────────────────────────────────────
+function Inventario({inventory,setInventory,suppliers,restocks,setRestocks}){
+  const emptyForm={name:"",brand:"",size:"",costPrice:"",salePrice:"",stock:"0",minStock:"2",supplierId:"",notes:""};
+
+  const[modal,setModal]=useState(false);
+  const[editModal,setEditModal]=useState(false);
+  const[editId,setEditId]=useState(null);
+  const[form,setForm]=useState(emptyForm);
+  const[search,setSearch]=useState("");
+  const[confirmDel,setConfirmDel]=useState(null);
+  const[mergeModal,setMergeModal]=useState(null);
+  const[historyModal,setHistoryModal]=useState(null);
+
+  // ── Producto CRUD ──
+  const save=async()=>{
+    if(!form.name.trim())return;
+    const updated=[...inventory,{...form,id:uid(),createdAt:today()}];
+    setInventory(updated);await saveData("inventory",updated);setForm(emptyForm);setModal(false);
+  };
+  const saveEdit=async()=>{
+    if(!form.name.trim())return;
+    const updated=inventory.map(p=>p.id===editId?{...p,...form}:p);
+    setInventory(updated);await saveData("inventory",updated);setEditModal(false);setEditId(null);setForm(emptyForm);
+  };
+  const doDelete=async()=>{
+    const updated=inventory.filter(p=>p.id!==confirmDel);
+    setInventory(updated);await saveData("inventory",updated);setConfirmDel(null);
+  };
+  const openEdit=(p,e)=>{e.stopPropagation();setEditId(p.id);setForm({name:p.name,brand:p.brand||"",size:p.size||"",costPrice:p.costPrice||"",salePrice:p.salePrice||"",stock:p.stock||"",minStock:p.minStock||"2",supplierId:p.supplierId||"",notes:p.notes||""});setEditModal(true);};
+
+  const adjustStock=async(item,delta)=>{
+    const newStock=Math.max(0,(parseInt(item.stock)||0)+delta);
+    const updated=inventory.map(p=>p.id===item.id?{...p,stock:newStock}:p);
+    setInventory(updated);await saveData("inventory",updated);
+  };
+  const saveStockDirect=async(item,val)=>{
+    const newStock=Math.max(0,parseInt(val)||0);
+    const updated=inventory.map(p=>p.id===item.id?{...p,stock:newStock}:p);
+    setInventory(updated);await saveData("inventory",updated);
+  };
+
+  // ── Fusión de duplicados ──
+  const doMerge=async()=>{
+    if(!mergeModal)return;
+    const{keepId,discardId}=mergeModal;
+    const keep=inventory.find(p=>p.id===keepId);
+    const discard=inventory.find(p=>p.id===discardId);
+    if(!keep||!discard)return;
+    // Sumar stocks
+    const mergedStock=(parseInt(keep.stock)||0)+(parseInt(discard.stock)||0);
+    // Reasignar restocks del descartado al que se mantiene
+    const updatedRestocks=restocks.map(r=>r.inventoryId===discardId?{...r,inventoryId:keepId}:r);
+    // Eliminar el duplicado y actualizar el que se mantiene
+    const updatedInv=inventory.filter(p=>p.id!==discardId).map(p=>p.id===keepId?{...p,stock:mergedStock}:p);
+    setInventory(updatedInv);await saveData("inventory",updatedInv);
+    setRestocks(updatedRestocks);await saveData("restocks",updatedRestocks);
+    setMergeModal(null);
+  };
+
+  // Detectar duplicados (mismo nombre+marca+tamaño, ignorando mayúsculas)
+  const normKey=p=>`${p.name.trim().toLowerCase()}|${(p.brand||"").trim().toLowerCase()}|${(p.size||"").trim().toLowerCase()}`;
+  const dupGroups=Object.values(inventory.reduce((acc,p)=>{const k=normKey(p);if(!acc[k])acc[k]=[];acc[k].push(p);return acc;},{})).filter(g=>g.length>1);
+
+  // ── Cálculos globales ──
+  const filtered=inventory.filter(p=>p.name.toLowerCase().includes(search.toLowerCase())||(p.brand&&p.brand.toLowerCase().includes(search.toLowerCase())));
+  const lowStock=inventory.filter(p=>(parseInt(p.stock)||0)<=(p.minStock!==''&&p.minStock!=null?parseInt(p.minStock):2));
+  const lowStockCount=lowStock.length;
+  const totalStockValue=inventory.reduce((a,p)=>{const s=parseInt(p.stock)||0;const c=parseFloat(p.costPrice||0);return a+s*c;},0);
+  const totalSaleValue=inventory.reduce((a,p)=>{const s=parseInt(p.stock)||0;const sp=parseFloat(p.salePrice||0);return a+s*sp;},0);
+  const withMargin=inventory.filter(p=>p.costPrice&&p.salePrice&&parseFloat(p.costPrice)>0);
+  const avgMarginPct=withMargin.length?withMargin.reduce((a,p)=>{const m=(parseFloat(p.salePrice)-parseFloat(p.costPrice))/parseFloat(p.costPrice)*100;return a+m;},0)/withMargin.length:0;
+  const totalUnits=inventory.reduce((a,p)=>(parseInt(p.stock)||0)+a,0);
+
+  // ── Campos para NUEVO producto (solo catálogo, sin stock/costo/proveedor) ──
+  const InvFields=()=>(
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="Nombre del Perfume *"><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Chanel No.5" autoFocus/></Field>
+        <Field label="Marca"><input value={form.brand} onChange={e=>setForm(f=>({...f,brand:e.target.value}))} placeholder="Ej. Chanel"/></Field>
+      </div>
+      <Field label="Tamaño / Presentación"><input value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="Ej. 100ml, 50ml, 3.4 EDT M"/></Field>
+      <Field label="Precio de Venta $"><input type="number" onWheel={e=>e.target.blur()} value={form.salePrice} onChange={e=>setForm(f=>({...f,salePrice:e.target.value}))} placeholder="0.00"/></Field>
+      <Field label="Stock mínimo de alerta"><input type="number" onWheel={e=>e.target.blur()} value={form.minStock} onChange={e=>setForm(f=>({...f,minStock:e.target.value}))} placeholder="2"/></Field>
+      <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+      <div style={{fontSize:12,color:G.textMuted,padding:"8px 10px",background:"rgba(255,255,255,.03)",borderRadius:8}}>
+        ⓘ El stock, precio de compra y proveedor se registran al <strong>Reabastecer</strong> por primera vez.
+      </div>
+    </>
+  );
+
+  // ── Campos para EDITAR producto (todos los campos) ──
+  const EditInvFields=()=>(
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="Nombre del Perfume *"><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Chanel No.5"/></Field>
+        <Field label="Marca"><input value={form.brand} onChange={e=>setForm(f=>({...f,brand:e.target.value}))} placeholder="Ej. Chanel"/></Field>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="Tamaño / Presentación"><input value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="Ej. 100ml"/></Field>
+        <Field label="Precio de Venta $"><input type="number" onWheel={e=>e.target.blur()} value={form.salePrice} onChange={e=>setForm(f=>({...f,salePrice:e.target.value}))} placeholder="0.00"/></Field>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="Precio de compra $ (referencia)"><input type="number" onWheel={e=>e.target.blur()} value={form.costPrice} onChange={e=>setForm(f=>({...f,costPrice:e.target.value}))} placeholder="0.00"/></Field>
+        <Field label="Stock mínimo de alerta"><input type="number" onWheel={e=>e.target.blur()} value={form.minStock} onChange={e=>setForm(f=>({...f,minStock:e.target.value}))} placeholder="2"/></Field>
+      </div>
+      <Field label="🏪 Proveedor principal">
+        <select value={form.supplierId} onChange={e=>setForm(f=>({...f,supplierId:e.target.value}))}>
+          <option value="">— Sin proveedor —</option>
+          {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}{s.phone?` · ${s.phone}`:""}</option>)}
+        </select>
+      </Field>
+      <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+    </>
+  );
+
+
+  return(
+    <div className="fade-in">
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight}}>Inventario</div>
+          <div style={{color:G.textMuted,fontSize:13}}>{inventory.length} producto(s) · {totalUnits} unidades en total{lowStockCount>0&&<span style={{color:G.red}}> · ⚠ {lowStockCount} con stock bajo</span>}</div>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn onClick={()=>{setForm(emptyForm);setModal(true);}}>+ Nuevo Producto</Btn>
+        </div>
+      </div>
+
+      {/* Stats cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:20}}>
+        <Card style={{padding:"14px 16px"}}>
+          <div style={{fontSize:11,color:G.textMuted,marginBottom:4}}>💰 Capital en stock</div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.red,fontWeight:600}}>{fmt$(totalStockValue)}</div>
+          <div style={{fontSize:11,color:G.textMuted,marginTop:2}}>precio de compra</div>
+        </Card>
+        <Card style={{padding:"14px 16px"}}>
+          <div style={{fontSize:11,color:G.textMuted,marginBottom:4}}>📈 Valor potencial</div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.green,fontWeight:600}}>{fmt$(totalSaleValue)}</div>
+          <div style={{fontSize:11,color:G.textMuted,marginTop:2}}>si vendes todo</div>
+        </Card>
+        <Card style={{padding:"14px 16px"}}>
+          <div style={{fontSize:11,color:G.textMuted,marginBottom:4}}>✨ Ganancia potencial</div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.gold,fontWeight:600}}>{fmt$(totalSaleValue-totalStockValue)}</div>
+          <div style={{fontSize:11,color:G.textMuted,marginTop:2}}>al vender todo</div>
+        </Card>
+        <Card style={{padding:"14px 16px"}}>
+          <div style={{fontSize:11,color:G.textMuted,marginBottom:4}}>📊 Margen promedio</div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:avgMarginPct>=0?G.goldLight:G.red,fontWeight:600}}>{avgMarginPct.toFixed(1)}%</div>
+          <div style={{fontSize:11,color:G.textMuted,marginTop:2}}>{withMargin.length} producto(s)</div>
+        </Card>
+      </div>
+
+      <input placeholder="🔍 Buscar por nombre o marca..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:16}}/>
+
+      {/* Banner de duplicados detectados */}
+      {dupGroups.length>0&&(
+        <div style={{marginBottom:16,padding:"12px 16px",background:"rgba(201,168,76,.07)",border:"1px solid rgba(201,168,76,.35)",borderRadius:10}}>
+          <div style={{fontWeight:600,color:G.goldLight,fontSize:13,marginBottom:10}}>⚠️ Se detectaron productos duplicados — mismo nombre, diferente entrada</div>
+          {dupGroups.map((group,gi)=>(
+            <div key={gi} style={{marginBottom:gi<dupGroups.length-1?12:0}}>
+              <div style={{fontSize:12,color:G.textMuted,marginBottom:6}}>
+                <strong style={{color:G.text}}>{group[0].name}{group[0].brand?" · "+group[0].brand:""}{group[0].size?" "+group[0].size:""}</strong> — {group.length} entradas separadas
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                {group.map((p,i)=>{
+                  const sup=suppliers.find(s=>s.id===p.supplierId);
+                  return(
+                    <div key={p.id} style={{background:"rgba(255,255,255,.05)",borderRadius:8,padding:"6px 12px",fontSize:12,border:`1px solid ${G.cardBorder}`}}>
+                      <span style={{color:G.textMuted}}>Stock: </span><strong>{parseInt(p.stock)||0}</strong>
+                      {sup&&<span style={{color:G.blue,marginLeft:8}}>🏪 {sup.name}</span>}
+                    </div>
+                  );
+                })}
+                <Btn size="sm" variant="ghost" onClick={()=>setMergeModal({group})}>🔀 Fusionar</Btn>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lowStockCount>0&&(
+        <div style={{marginBottom:16,padding:"10px 14px",background:"rgba(224,92,92,.08)",border:"1px solid rgba(224,92,92,.3)",borderRadius:10,fontSize:13}}>
+          ⚠️ <strong style={{color:G.red}}>Stock bajo:</strong> {lowStock.map(p=>p.name).join(", ")}
+        </div>
+      )}
+
+      {/* Tarjetas de productos */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:12,maxHeight:680,overflowY:"auto",paddingRight:4}}>
+        {filtered.map(p=>{
+          const stock=parseInt(p.stock)||0;
+          const minS=p.minStock!==''&&p.minStock!=null?parseInt(p.minStock):2;
+          const isLow=stock<=minS;
+          const costP=parseFloat(p.costPrice||0);
+          const saleP=parseFloat(p.salePrice||0);
+          const margin=p.costPrice&&p.salePrice?saleP-costP:null;
+          const marginPct=margin!==null&&costP>0?((saleP-costP)/costP*100):null;
+          const supplier=suppliers.find(s=>s.id===p.supplierId);
+          const pRestocks=restocks.filter(r=>r.inventoryId===p.id);
+          return(
+            <Card key={p.id} style={{borderColor:isLow?"rgba(224,92,92,.4)":G.cardBorder}}>
+              {/* Nombre + botones */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:15}}>{p.name}</div>
+                  {p.brand&&<div style={{fontSize:12,color:G.textMuted}}>{p.brand}{p.size&&` · ${p.size}`}</div>}
+                  {supplier&&<div style={{fontSize:11,color:G.blue,marginTop:2}}>🏪 {supplier.name}</div>}
+                </div>
+                <div style={{display:"flex",gap:4,flexShrink:0,marginLeft:6}}>
+                  <Btn variant="edit" size="sm" onClick={e=>openEdit(p,e)}>✏️</Btn>
+                  <Btn variant="danger" size="sm" onClick={e=>{e.stopPropagation();setConfirmDel(p.id);}}>🗑️</Btn>
+                </div>
+              </div>
+              <div className="gold-line"/>
+
+              {/* Precios + márgenes */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,marginBottom:10,textAlign:"center"}}>
+                <div>
+                  <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Compra</div>
+                  <div style={{fontWeight:600,fontSize:13,color:G.textMuted}}>{p.costPrice?fmt$(p.costPrice):"—"}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Venta</div>
+                  <div style={{fontWeight:600,fontSize:13,color:G.gold}}>{p.salePrice?fmt$(p.salePrice):"—"}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Ganancia</div>
+                  {margin!==null
+                    ?<div style={{fontWeight:700,fontSize:13,color:margin>=0?G.green:G.red}}>
+                        {fmt$(margin)}{marginPct!==null&&<span style={{fontSize:10,marginLeft:3,opacity:.85}}>({marginPct.toFixed(0)}%)</span>}
+                      </div>
+                    :<div style={{fontSize:13,color:G.textMuted}}>—</div>}
+                </div>
+              </div>
+
+              {/* Stock — solo lectura, sin botones */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.04)",borderRadius:8,padding:"10px 12px",marginBottom:10,gap:10}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Stock actual</div>
+                  <div style={{fontWeight:700,fontSize:26,color:isLow?G.red:G.text,lineHeight:1}}>{stock}</div>
+                  {isLow&&<div style={{fontSize:10,color:G.red,marginTop:2}}>⚠ stock bajo</div>}
+                </div>
+              </div>
+
+              {p.notes&&<div style={{fontSize:11,color:G.textMuted,marginBottom:8,lineHeight:1.4}}>{p.notes}</div>}
+
+              {/* Botón historial */}
+              <Btn variant="ghost" size="sm" style={{width:"100%",position:"relative"}} onClick={()=>setHistoryModal(p)}>
+                📋 Historial de entradas
+                {pRestocks.length>0&&<span style={{position:"absolute",top:-5,right:-5,background:G.gold,color:"#0d0d0f",borderRadius:"50%",width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700}}>{pRestocks.length}</span>}
+              </Btn>
+            </Card>
+          );
+        })}
+        {filtered.length===0&&<p style={{color:G.textMuted,fontSize:13}}>Sin productos que coincidan.</p>}
+      </div>
+
+      {/* ── Modals ── */}
+      {modal&&(
+        <Modal title="Nuevo Producto" onClose={()=>setModal(false)} wide>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Nombre del Perfume *"><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Chanel No.5"/></Field>
+            <Field label="Marca"><input value={form.brand} onChange={e=>setForm(f=>({...f,brand:e.target.value}))} placeholder="Ej. Chanel"/></Field>
+          </div>
+          <Field label="Tamaño / Presentación"><input value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="Ej. 100ml, 50ml, 3.4 EDT M"/></Field>
+          <Field label="Precio de Venta $"><input type="number" onWheel={e=>e.target.blur()} value={form.salePrice} onChange={e=>setForm(f=>({...f,salePrice:e.target.value}))} placeholder="0.00"/></Field>
+          <Field label="Stock mínimo de alerta"><input type="number" onWheel={e=>e.target.blur()} value={form.minStock} onChange={e=>setForm(f=>({...f,minStock:e.target.value}))} placeholder="2"/></Field>
+          <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+          <div style={{fontSize:12,color:G.textMuted,padding:"8px 10px",background:"rgba(255,255,255,.03)",borderRadius:8}}>
+            ⓘ El stock, precio de compra y proveedor se registran al <strong>Reabastecer</strong> por primera vez.
+          </div>
+          <Btn onClick={save} style={{width:"100%"}}>Guardar Producto</Btn>
+        </Modal>
+      )}
+      {editModal&&(
+        <Modal title="Editar Producto" onClose={()=>{setEditModal(false);setEditId(null);}} wide>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Nombre del Perfume *"><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Chanel No.5"/></Field>
+            <Field label="Marca"><input value={form.brand} onChange={e=>setForm(f=>({...f,brand:e.target.value}))} placeholder="Ej. Chanel"/></Field>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Tamaño / Presentación"><input value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="Ej. 100ml"/></Field>
+            <Field label="Precio de Venta $"><input type="number" onWheel={e=>e.target.blur()} value={form.salePrice} onChange={e=>setForm(f=>({...f,salePrice:e.target.value}))} placeholder="0.00"/></Field>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Precio de compra $ (referencia)"><input type="number" onWheel={e=>e.target.blur()} value={form.costPrice} onChange={e=>setForm(f=>({...f,costPrice:e.target.value}))} placeholder="0.00"/></Field>
+            <Field label="Stock mínimo de alerta"><input type="number" onWheel={e=>e.target.blur()} value={form.minStock} onChange={e=>setForm(f=>({...f,minStock:e.target.value}))} placeholder="2"/></Field>
+          </div>
+          <Field label="🏪 Proveedor principal">
+            <select value={form.supplierId} onChange={e=>setForm(f=>({...f,supplierId:e.target.value}))}>
+              <option value="">— Sin proveedor —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}{s.phone?` · ${s.phone}`:""}</option>)}
+            </select>
+          </Field>
+          <Field label="Notas"><textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+          <Btn onClick={saveEdit} style={{width:"100%"}}>Guardar Cambios</Btn>
+        </Modal>
+      )}
+      {confirmDel&&<ConfirmModal message="¿Eliminar este producto?" subtext="El producto será eliminado del inventario." onConfirm={doDelete} onCancel={()=>setConfirmDel(null)}/>}
+
+      {/* Modal Fusionar duplicados */}
+      {mergeModal&&<MergeModal group={mergeModal.group} inventory={inventory} setInventory={setInventory} restocks={restocks} setRestocks={setRestocks} suppliers={suppliers} onClose={()=>setMergeModal(null)}/>}
+      {historyModal&&(()=>{
+        const pRestocks=[...restocks.filter(r=>r.inventoryId===historyModal.id)].sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date));
+        const totalUnitsIn=pRestocks.reduce((a,r)=>a+(parseInt(r.qty)||0),0);
+        const totalSpent=pRestocks.reduce((a,r)=>a+parseFloat(r.totalPaid||0),0);
+        return(
+          <Modal title={`📋 Historial: ${historyModal.name}`} onClose={()=>setHistoryModal(null)} wide>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+              <div style={{background:"rgba(255,255,255,.04)",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:G.textMuted}}>Entradas registradas</div>
+                <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.goldLight,fontWeight:600}}>{pRestocks.length}</div>
+              </div>
+              <div style={{background:"rgba(255,255,255,.04)",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:G.textMuted}}>Unidades ingresadas</div>
+                <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.green,fontWeight:600}}>{totalUnitsIn}</div>
+              </div>
+              <div style={{background:"rgba(255,255,255,.04)",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:G.textMuted}}>Total invertido</div>
+                <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:G.red,fontWeight:600}}>{fmt$(totalSpent)}</div>
+              </div>
+            </div>
+            {pRestocks.length===0
+              ?<p style={{color:G.textMuted,fontSize:13,textAlign:"center",padding:20}}>No hay reabastecimientos registrados para este producto.</p>
+              :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:400,overflowY:"auto"}}>
+                {pRestocks.map((r,i)=>{
+                  const sup=suppliers.find(s=>s.id===r.supplierId);
+                  return(
+                    <div key={r.id} style={{background:"rgba(255,255,255,.03)",borderRadius:10,padding:"12px 14px",border:`1px solid ${G.cardBorder}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                        <div>
+                          <div style={{fontWeight:600,fontSize:14,color:G.green}}>+{r.qty} unidades</div>
+                          {r.orderId&&<div style={{fontSize:11,color:G.gold,marginTop:2}}>🛒 Pedido #{r.orderId.slice(-6).toUpperCase()}</div>}
+                          {sup&&<div style={{fontSize:12,color:G.blue,marginTop:2}}>🏪 {sup.name}</div>}
+                          <div style={{fontSize:12,color:G.textMuted,marginTop:2}}>📅 {fmtDate(r.date)}</div>
+                          {r.notes&&<div style={{fontSize:12,color:G.textMuted,marginTop:2}}>📝 {r.notes}</div>}
+                        </div>
+                        <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
+                          {r.costPrice&&<div style={{fontSize:12,color:G.textMuted}}>{fmt$(r.costPrice)}/u{r.extraCostPerUnit>0&&<span style={{color:G.gold}}> +{fmt$(r.extraCostPerUnit)} extra</span>}</div>}
+                          {r.costPriceWithExtra&&r.extraCostPerUnit>0&&<div style={{fontSize:11,color:G.gold}}>={fmt$(r.costPriceWithExtra)}/u final</div>}
+                          {parseFloat(r.totalPaid||0)>0&&<div style={{fontWeight:700,color:G.gold,fontSize:15}}>{fmt$(r.totalPaid)}</div>}
+                        </div>
+                      </div>
+                      {/* Adjuntos */}
+                      {r.attachments&&r.attachments.length>0&&(
+                        <div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${G.cardBorder}`}}>
+                          <div style={{fontSize:11,color:G.textMuted,marginBottom:6}}>📎 Comprobantes ({r.attachments.length})</div>
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {r.attachments.map((a,ai)=>(
+                              a.url
+                              ?<a key={ai} href={a.url} target="_blank" rel="noopener noreferrer" style={{height:40,padding:"0 10px",display:"flex",alignItems:"center",gap:5,background:"rgba(201,168,76,.08)",borderRadius:6,border:`1px solid ${G.cardBorder}`,fontSize:11,color:G.gold,textDecoration:"none"}}>📎 {a.name}</a>
+                              :a.dataUrl&&(a.type||"").startsWith("image/")
+                              ?<img key={ai} src={a.dataUrl} alt={a.name} onClick={()=>downloadReceipt(a.dataUrl,a.name)} style={{height:52,width:52,objectFit:"cover",borderRadius:6,cursor:"pointer",border:`1px solid ${G.cardBorder}`}} title={a.name}/>
+                              :<div key={ai} onClick={()=>a.dataUrl&&downloadReceipt(a.dataUrl,a.name)} style={{height:52,width:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.05)",border:`1px solid ${G.cardBorder}`,borderRadius:6,cursor:"pointer",fontSize:10,color:G.textMuted,gap:1}}>
+                                  <span style={{fontSize:20}}>📄</span><span>PDF</span>
+                                </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            }
+          </Modal>
+        );
+      })()}
+      {/* Modal Fusionar duplicados */}
+      {mergeModal&&<MergeModal group={mergeModal.group} inventory={inventory} setInventory={setInventory} restocks={restocks} setRestocks={setRestocks} suppliers={suppliers} onClose={()=>setMergeModal(null)}/>}
+
+    </div>
+  );
+}
+
+function MergeModal({group,inventory,setInventory,restocks,setRestocks,suppliers,onClose}){
+  const[keepId,setKeepId]=useState(group[0].id);
+  const totalStock=group.reduce((a,p)=>(parseInt(p.stock)||0)+a,0);
+  const totalR=group.reduce((a,p)=>a+restocks.filter(r=>r.inventoryId===p.id).length,0);
+  const doMerge=async()=>{
+    const discardIds=group.filter(p=>p.id!==keepId).map(p=>p.id);
+    const updatedRestocks=restocks.map(r=>discardIds.includes(r.inventoryId)?{...r,inventoryId:keepId}:r);
+    const updatedInv=inventory.filter(p=>!discardIds.includes(p.id)).map(p=>p.id===keepId?{...p,stock:totalStock}:p);
+    setInventory(updatedInv);await saveData("inventory",updatedInv);
+    setRestocks(updatedRestocks);await saveData("restocks",updatedRestocks);
+    onClose();
+  };
+  return(
+    <Modal title="🔀 Fusionar productos duplicados" onClose={onClose} wide>
+      <div style={{background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.2)",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:13}}>
+        <div style={{marginBottom:6,color:G.textMuted,fontWeight:600}}>La fusión hará lo siguiente:</div>
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          <div>✅ Sumará todos los stocks → <strong style={{color:G.green}}>{totalStock} unidades</strong> en un solo producto</div>
+          <div>✅ Combinará los historiales de reabastecimiento → <strong style={{color:G.blue}}>{totalR} entrada(s)</strong></div>
+          <div>✅ Eliminará las entradas duplicadas del inventario</div>
+          <div style={{color:G.red,marginTop:4}}>⚠ Esta acción no se puede deshacer</div>
+        </div>
+      </div>
+      <Field label="¿Cuál entrada quieres conservar? (sus datos quedarán como el producto final)">
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:4}}>
+          {group.map(p=>{
+            const sup=suppliers.find(s=>s.id===p.supplierId);
+            const pR=restocks.filter(r=>r.inventoryId===p.id);
+            return(
+              <label key={p.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:10,border:`2px solid ${keepId===p.id?G.gold:G.cardBorder}`,cursor:"pointer",background:keepId===p.id?"rgba(201,168,76,.07)":"rgba(255,255,255,.02)",transition:"all .2s"}}>
+                <input type="radio" name="keepId" value={p.id} checked={keepId===p.id} onChange={()=>setKeepId(p.id)} style={{marginTop:3}}/>
+                <div>
+                  <div style={{fontWeight:600,fontSize:14}}>{p.name}{p.brand?" · "+p.brand:""}{p.size?" "+p.size:""}</div>
+                  <div style={{fontSize:12,color:G.textMuted,marginTop:3,display:"flex",gap:14,flexWrap:"wrap"}}>
+                    <span>Stock: <strong style={{color:G.text}}>{parseInt(p.stock)||0}</strong></span>
+                    {p.costPrice&&<span>Compra: <strong style={{color:G.text}}>{fmt$(p.costPrice)}</strong></span>}
+                    {p.salePrice&&<span>Venta: <strong style={{color:G.gold}}>{fmt$(p.salePrice)}</strong></span>}
+                    {sup&&<span style={{color:G.blue}}>🏪 {sup.name}</span>}
+                    <span>Historial: <strong style={{color:G.blue}}>{pR.length} entrada(s)</strong></span>
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      </Field>
+      <Btn onClick={doMerge} style={{width:"100%",marginTop:8}}>✅ Confirmar fusión</Btn>
+    </Modal>
+  );
+}
+
+// ─── PEDIDOS ──────────────────────────────────────────────────────────────────
+function Pedidos({inventory,setInventory,suppliers,setSuppliers,restocks,setRestocks}){
+  const[newModal,setNewModal]=useState(false);
+  const[detailModal,setDetailModal]=useState(null);
+  const[editModal,setEditModal]=useState(null);
+  const[search,setSearch]=useState("");
+  const[deleteConfirm1,setDeleteConfirm1]=useState(null); // first confirm
+  const[deleteConfirm2,setDeleteConfirm2]=useState(null); // second confirm
+  // Proveedores
+  const emptySupForm={name:"",phone:"",email:"",address:"",notes:""};
+  const[supSection,setSupSection]=useState(false);
+  const[supModal,setSupModal]=useState(false);
+  const[supEditModal,setSupEditModal]=useState(false);
+  const[supEditId,setSupEditId]=useState(null);
+  const[supForm,setSupForm]=useState(emptySupForm);
+  const[supConfirmDel,setSupConfirmDel]=useState(null);
+  const saveSup=async()=>{if(!supForm.name.trim())return;const updated=[...suppliers,{...supForm,id:uid(),createdAt:today()}];setSuppliers(updated);await saveData("suppliers",updated);setSupForm(emptySupForm);setSupModal(false);};
+  const saveEditSup=async()=>{if(!supForm.name.trim())return;const updated=suppliers.map(s=>s.id===supEditId?{...s,...supForm}:s);setSuppliers(updated);await saveData("suppliers",updated);setSupEditModal(false);setSupEditId(null);setSupForm(emptySupForm);};
+  const doDeleteSup=async()=>{const updated=suppliers.filter(s=>s.id!==supConfirmDel);setSuppliers(updated);await saveData("suppliers",updated);setSupConfirmDel(null);};
+  const openEditSup=(s,e)=>{e.stopPropagation();setSupEditId(s.id);setSupForm({name:s.name,phone:s.phone||"",email:s.email||"",address:s.address||"",notes:s.notes||""});setSupEditModal(true);};
+
+  // Agrupar restocks por orderId
+  const orders=useMemo(()=>{
+    const byOrder={};
+    restocks.forEach(r=>{
+      const oid=r.orderId||r.id;
+      if(!byOrder[oid]){
+        byOrder[oid]={orderId:oid,date:r.date,supplierId:r.supplierId||"",notes:r.notes||"",attachments:[],shippingCost:r.shippingCost||"",marketingCost:r.marketingCost||"",items:[],createdAt:r.createdAt||r.date};
+      }
+      // Recoger adjuntos de cualquier línea que los tenga (están en la primera)
+      if(r.attachments&&r.attachments.length>0&&byOrder[oid].attachments.length===0){
+        byOrder[oid].attachments=r.attachments;
+      }
+      byOrder[oid].items.push(r);
+    });
+    return Object.values(byOrder).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  },[restocks]);
+
+  const filteredOrders=orders.filter(o=>{
+    const q=search.toLowerCase();
+    if(!q)return true;
+    const sup=suppliers.find(s=>s.id===o.supplierId);
+    const idMatch=o.orderId.slice(-6).toLowerCase().includes(q);
+    const supMatch=sup&&sup.name.toLowerCase().includes(q);
+    const dateMatch=fmtDate(o.date).toLowerCase().includes(q);
+    const noteMatch=o.notes&&o.notes.toLowerCase().includes(q);
+    const prodMatch=o.items.some(r=>{const p=inventory.find(x=>x.id===r.inventoryId);return p&&(p.name.toLowerCase().includes(q)||( p.brand&&p.brand.toLowerCase().includes(q)));});
+    return idMatch||supMatch||dateMatch||noteMatch||prodMatch;
+  });
+
+  const totalInvested=orders.reduce((a,o)=>a+o.items.reduce((b,r)=>b+(parseFloat(r.costPrice||0)*(parseInt(r.qty)||0)),0)+parseFloat(o.shippingCost||0)+parseFloat(o.marketingCost||0),0);
+  const totalUnits=orders.reduce((a,o)=>a+o.items.reduce((b,r)=>b+(parseInt(r.qty)||0),0),0);
+
+  const saveEdit=async(order,edited)=>{
+    const updated=restocks.map(r=>(r.orderId||r.id)===order.orderId?{...r,...edited}:r);
+    setRestocks(updated);await saveData("restocks",updated);
+    setEditModal(null);
+  };
+
+  // Eliminar pedido: revierte el stock de todos los productos
+  const doDeleteOrder=async(order)=>{
+    // Revertir stock
+    let updatedInv=[...inventory];
+    order.items.forEach(r=>{
+      const qty=parseInt(r.qty)||0;
+      updatedInv=updatedInv.map(p=>p.id===r.inventoryId?{...p,stock:Math.max(0,(parseInt(p.stock)||0)-qty)}:p);
+    });
+    const updatedR=restocks.filter(r=>(r.orderId||r.id)!==order.orderId);
+    setInventory(updatedInv);await saveData("inventory",updatedInv);
+    setRestocks(updatedR);await saveData("restocks",updatedR);
+    setDeleteConfirm2(null);setDeleteConfirm1(null);
+  };
+
+  return(
+    <div className="fade-in">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight}}>🛒 Pedidos</div>
+          <div style={{color:G.textMuted,fontSize:13}}>{orders.length} pedido(s) · {totalUnits} unidades ingresadas en total</div>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn variant="ghost" onClick={()=>setSupSection(v=>!v)}>🏪 Proveedores ({suppliers.length})</Btn>
+          <Btn variant="success" onClick={()=>setNewModal(true)}>📦 Nuevo Pedido</Btn>
+        </div>
+      </div>
+
+      {/* Panel Proveedores */}
+      {supSection&&(
+        <div style={{marginBottom:20,padding:"14px 16px",background:"rgba(255,255,255,.02)",border:`1px solid ${G.cardBorder}`,borderRadius:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontWeight:600,fontSize:14,color:G.goldLight}}>🏪 Proveedores</div>
+            <Btn size="sm" onClick={()=>{setSupForm(emptySupForm);setSupModal(true);}}>+ Nuevo</Btn>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+            {suppliers.length===0?<p style={{color:G.textMuted,fontSize:13}}>Sin proveedores registrados.</p>:suppliers.map(s=>(
+              <div key={s.id} style={{background:"rgba(255,255,255,.03)",borderRadius:10,padding:"10px 14px",border:`1px solid ${G.cardBorder}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>🏪 {s.name}</div>
+                    {s.phone&&<div style={{fontSize:11,color:G.textMuted,marginTop:2}}>📞 {s.phone}</div>}
+                    {s.email&&<div style={{fontSize:11,color:G.textMuted,marginTop:2}}>✉️ {s.email}</div>}
+                    {s.address&&<div style={{fontSize:11,color:G.textMuted,marginTop:2}}>📍 {s.address}</div>}
+                    <div style={{fontSize:11,color:G.textMuted,marginTop:4}}>{restocks.filter(r=>r.supplierId===s.id).length} restock(s)</div>
+                  </div>
+                  <div style={{display:"flex",gap:4,marginLeft:6}}>
+                    <Btn variant="edit" size="sm" onClick={e=>openEditSup(s,e)}>✏️</Btn>
+                    <Btn variant="danger" size="sm" onClick={e=>{e.stopPropagation();setSupConfirmDel(s.id);}}>🗑️</Btn>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:16}}>
+        {[["🛒 Pedidos realizados",orders.length,G.goldLight],["📦 Unidades ingresadas",totalUnits,G.green],["💰 Total invertido",fmt$(totalInvested),G.red]].map(([l,v,c])=>(
+          <Card key={l} style={{padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:G.textMuted,marginBottom:4}}>{l}</div>
+            <div style={{fontFamily:"Cormorant Garamond",fontSize:24,color:c,fontWeight:600}}>{v}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Barra de búsqueda */}
+      <input placeholder="🔍 Buscar por ID, proveedor, fecha, producto o notas..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:16}}/>
+
+      {orders.length===0?(
+        <Card style={{textAlign:"center",padding:40}}>
+          <div style={{fontSize:32,marginBottom:12}}>📦</div>
+          <div style={{color:G.textMuted,fontSize:14}}>Aún no hay pedidos registrados.</div>
+          <div style={{color:G.textMuted,fontSize:12,marginTop:6}}>Usa "Nuevo Pedido" para registrar tu primera entrada de mercancía.</div>
+        </Card>
+      ):filteredOrders.length===0?(
+        <p style={{color:G.textMuted,fontSize:13,textAlign:"center",padding:20}}>No se encontraron pedidos con "{search}".</p>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {filteredOrders.map(order=>{
+            const sup=suppliers.find(s=>s.id===order.supplierId);
+            // Perfumes = solo costo base (sin extras distribuidos)
+            const totalPerfumes=order.items.reduce((a,r)=>a+(parseFloat(r.costPrice||0)*(parseInt(r.qty)||0)),0);
+            const totalQty=order.items.reduce((a,r)=>a+(parseInt(r.qty)||0),0);
+            const ship=parseFloat(order.shippingCost||0);
+            const mkt=parseFloat(order.marketingCost||0);
+            const totalPedido=totalPerfumes+ship+mkt;
+            return(
+              <Card key={order.orderId}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,flexWrap:"wrap"}}>
+                      <div style={{fontFamily:"Cormorant Garamond",fontSize:18,color:G.goldLight}}>Pedido #{order.orderId.slice(-6).toUpperCase()}</div>
+                      <div style={{fontSize:11,padding:"2px 8px",background:"rgba(201,168,76,.12)",borderRadius:20,color:G.gold,border:"1px solid rgba(201,168,76,.25)"}}>{fmtDate(order.date)}</div>
+                    </div>
+                    {sup&&<div style={{fontSize:13,color:G.blue}}>🏪 {sup.name}</div>}
+                    {order.notes&&<div style={{fontSize:12,color:G.textMuted,marginTop:2}}>📝 {order.notes}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
+                    <Btn variant="ghost" size="sm" onClick={()=>setDetailModal(order)}>📋 Detalle</Btn>
+                    <Btn variant="edit" size="sm" onClick={()=>setEditModal(order)}>✏️ Editar</Btn>
+                    <Btn variant="danger" size="sm" onClick={()=>setDeleteConfirm1(order)}>🗑️</Btn>
+                  </div>
+                </div>
+                <div className="gold-line"/>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10,fontSize:13}}>
+                  <div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Productos</div>
+                    <div style={{fontWeight:700,color:G.text}}>{order.items.length}</div>
+                  </div>
+                  <div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Unidades</div>
+                    <div style={{fontWeight:700,color:G.green}}>{totalQty}</div>
+                  </div>
+                  <div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Perfumes</div>
+                    <div style={{fontWeight:700,color:G.text}}>{fmt$(totalPerfumes)}</div>
+                  </div>
+                  {ship>0&&<div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Envío</div>
+                    <div style={{fontWeight:700,color:G.gold}}>{fmt$(ship)}</div>
+                  </div>}
+                  {mkt>0&&<div style={{background:"rgba(255,255,255,.03)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Marketing</div>
+                    <div style={{fontWeight:700,color:G.blue}}>{fmt$(mkt)}</div>
+                  </div>}
+                  <div style={{background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.2)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:2}}>Total pedido</div>
+                    <div style={{fontWeight:700,color:G.gold,fontSize:15}}>{fmt$(totalPedido)}</div>
+                  </div>
+                </div>
+                {order.attachments&&order.attachments.length>0&&(
+                  <div style={{marginTop:10,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                    <span style={{fontSize:11,color:G.textMuted}}>📎</span>
+                    {order.attachments.map((a,ai)=>(
+                      a.url
+                      ?<a key={ai} href={a.url} target="_blank" rel="noopener noreferrer" style={{height:36,padding:"0 10px",display:"flex",alignItems:"center",gap:5,background:"rgba(201,168,76,.08)",borderRadius:6,border:`1px solid ${G.cardBorder}`,fontSize:11,color:G.gold,textDecoration:"none"}}>📎 {a.name}</a>
+                      :a.dataUrl&&a.type&&a.type.startsWith("image/")
+                      ?<img key={ai} src={a.dataUrl} alt={a.name} onClick={()=>downloadReceipt(a.dataUrl,a.name)} style={{height:40,width:40,objectFit:"cover",borderRadius:5,cursor:"pointer",border:`1px solid ${G.cardBorder}`}} title={a.name}/>
+                      :<div key={ai} onClick={()=>a.dataUrl&&downloadReceipt(a.dataUrl,a.name)} style={{height:40,padding:"0 8px",display:"flex",alignItems:"center",gap:4,background:"rgba(255,255,255,.05)",borderRadius:5,cursor:"pointer",border:`1px solid ${G.cardBorder}`,fontSize:11,color:G.textMuted}}>
+                        📄 <span style={{maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Modal Nuevo Pedido */}
+      {newModal&&<BulkRestockModal inventory={inventory} setInventory={setInventory} restocks={restocks} setRestocks={setRestocks} suppliers={suppliers} onClose={()=>setNewModal(false)}/>}
+
+      {/* Modal Detalle */}
+      {detailModal&&(()=>{
+        const sup=suppliers.find(s=>s.id===detailModal.supplierId);
+        const totalOrder=detailModal.items.reduce((a,r)=>a+parseFloat(r.totalPaid||0),0);
+        return(
+          <Modal title={`📋 Detalle Pedido #${detailModal.orderId.slice(-6).toUpperCase()}`} onClose={()=>setDetailModal(null)} wide>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12,fontSize:13}}>
+              <span style={{color:G.textMuted}}>📅 {fmtDate(detailModal.date)}</span>
+              {sup&&<span style={{color:G.blue}}>🏪 {sup.name}</span>}
+              {detailModal.notes&&<span style={{color:G.textMuted}}>📝 {detailModal.notes}</span>}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:400,overflowY:"auto"}}>
+              {detailModal.items.map(r=>{
+                const prod=inventory.find(p=>p.id===r.inventoryId);
+                return(
+                  <div key={r.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:10,alignItems:"center",padding:"10px 12px",background:"rgba(255,255,255,.03)",borderRadius:8,fontSize:13}}>
+                    <div>
+                      <div style={{fontWeight:600}}>{prod?.name||"Producto eliminado"}</div>
+                      <div style={{fontSize:11,color:G.textMuted}}>{prod?.brand}{prod?.size&&` · ${prod.size}`}</div>
+                    </div>
+                    <div style={{textAlign:"center"}}><div style={{fontSize:10,color:G.textMuted}}>Unidades</div><div style={{fontWeight:700,color:G.green}}>+{r.qty}</div></div>
+                    <div style={{textAlign:"center"}}><div style={{fontSize:10,color:G.textMuted}}>Costo/u</div><div style={{fontWeight:600,color:G.text}}>{r.costPriceWithExtra?fmt$(r.costPriceWithExtra):r.costPrice?fmt$(r.costPrice):"—"}</div></div>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:10,color:G.textMuted}}>Total</div><div style={{fontWeight:700,color:G.gold}}>{fmt$(r.totalPaid||0)}</div></div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginTop:12,display:"flex",justifyContent:"space-between",padding:"10px 12px",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.2)",borderRadius:8,fontSize:14,fontWeight:600}}>
+              <span style={{color:G.textMuted}}>Total perfumes</span><span style={{color:G.gold}}>{fmt$(totalOrder)}</span>
+            </div>
+            {parseFloat(detailModal.shippingCost||0)>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 12px",fontSize:13}}><span style={{color:G.textMuted}}>+ Envío</span><span style={{color:G.gold}}>{fmt$(detailModal.shippingCost)}</span></div>}
+            {parseFloat(detailModal.marketingCost||0)>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 12px",fontSize:13}}><span style={{color:G.textMuted}}>+ Marketing</span><span style={{color:G.blue}}>{fmt$(detailModal.marketingCost)}</span></div>}
+          </Modal>
+        );
+      })()}
+
+      {/* Modal Editar */}
+      {editModal&&<EditOrderModal order={editModal} inventory={inventory} setInventory={setInventory} restocks={restocks} setRestocks={setRestocks} suppliers={suppliers} onSave={saveEdit} onClose={()=>setEditModal(null)}/>}
+
+      {/* Primera confirmación eliminar */}
+      {deleteConfirm1&&(
+        <Modal title="🗑️ Eliminar pedido" onClose={()=>setDeleteConfirm1(null)}>
+          <div style={{padding:"14px",background:"rgba(224,92,92,.08)",border:"1px solid rgba(224,92,92,.3)",borderRadius:10,marginBottom:16}}>
+            <div style={{fontWeight:600,color:G.red,marginBottom:8}}>¿Estás seguro que deseas eliminar este pedido?</div>
+            <div style={{fontSize:13,color:G.textMuted}}>Pedido <strong style={{color:G.text}}>#{deleteConfirm1.orderId.slice(-6).toUpperCase()}</strong> del {fmtDate(deleteConfirm1.date)}</div>
+            <div style={{fontSize:13,color:G.textMuted,marginTop:4}}>Esto revertirá el stock de <strong style={{color:G.text}}>{deleteConfirm1.items.reduce((a,r)=>a+(parseInt(r.qty)||0),0)} unidades</strong> en {deleteConfirm1.items.length} producto(s).</div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn variant="ghost" onClick={()=>setDeleteConfirm1(null)} style={{flex:1}}>Cancelar</Btn>
+            <Btn variant="danger" onClick={()=>{setDeleteConfirm2(deleteConfirm1);setDeleteConfirm1(null);}} style={{flex:1}}>Sí, continuar →</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Segunda confirmación eliminar */}
+      {deleteConfirm2&&(
+        <Modal title="⚠️ Confirmar eliminación" onClose={()=>setDeleteConfirm2(null)}>
+          <div style={{padding:"14px",background:"rgba(224,92,92,.12)",border:"2px solid rgba(224,92,92,.5)",borderRadius:10,marginBottom:16,textAlign:"center"}}>
+            <div style={{fontSize:28,marginBottom:8}}>⚠️</div>
+            <div style={{fontWeight:700,color:G.red,fontSize:15,marginBottom:8}}>Esta acción NO se puede deshacer</div>
+            <div style={{fontSize:13,color:G.textMuted}}>Se eliminarán permanentemente todos los registros de este pedido y se revertirá el stock del inventario.</div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn variant="ghost" onClick={()=>setDeleteConfirm2(null)} style={{flex:1}}>No, cancelar</Btn>
+            <Btn variant="danger" onClick={()=>doDeleteOrder(deleteConfirm2)} style={{flex:1,fontWeight:700}}>🗑️ Eliminar definitivamente</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modales proveedores */}
+      {supModal&&(
+        <Modal title="Nuevo Proveedor" onClose={()=>setSupModal(false)}>
+          <Field label="Nombre *"><input value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Distribuidora XYZ"/></Field>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Teléfono"><input value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="+58 412..."/></Field>
+            <Field label="Email"><input value={supForm.email} onChange={e=>setSupForm(f=>({...f,email:e.target.value}))} placeholder="correo@..."/></Field>
+          </div>
+          <Field label="Dirección"><input value={supForm.address} onChange={e=>setSupForm(f=>({...f,address:e.target.value}))} placeholder="Dirección..."/></Field>
+          <Field label="Notas"><textarea value={supForm.notes} onChange={e=>setSupForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+          <Btn onClick={saveSup} style={{width:"100%"}}>Guardar Proveedor</Btn>
+        </Modal>
+      )}
+      {supEditModal&&(
+        <Modal title="Editar Proveedor" onClose={()=>{setSupEditModal(false);setSupEditId(null);}}>
+          <Field label="Nombre *"><input value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="Ej. Distribuidora XYZ"/></Field>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Teléfono"><input value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="+58 412..."/></Field>
+            <Field label="Email"><input value={supForm.email} onChange={e=>setSupForm(f=>({...f,email:e.target.value}))} placeholder="correo@..."/></Field>
+          </div>
+          <Field label="Dirección"><input value={supForm.address} onChange={e=>setSupForm(f=>({...f,address:e.target.value}))} placeholder="Dirección..."/></Field>
+          <Field label="Notas"><textarea value={supForm.notes} onChange={e=>setSupForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="Info adicional..."/></Field>
+          <Btn onClick={saveEditSup} style={{width:"100%"}}>Guardar Cambios</Btn>
+        </Modal>
+      )}
+      {supConfirmDel&&<ConfirmModal message="¿Eliminar este proveedor?" subtext="El proveedor será eliminado." onConfirm={doDeleteSup} onCancel={()=>setSupConfirmDel(null)}/>}
+    </div>
+  );
+}
+
+function EditOrderModal({order,inventory,setInventory,restocks,setRestocks,suppliers,onSave,onClose}){
+  const[date,setDate]=useState(order.date||today());
+  const[supplierId,setSupplierId]=useState(order.supplierId||"");
+  const[notes,setNotes]=useState(order.notes||"");
+  const[shippingCost,setShippingCost]=useState(order.shippingCost||"");
+  const[marketingCost,setMarketingCost]=useState(order.marketingCost||"");
+  const[attachments,setAttachments]=useState(order.attachments||[]);
+  // Editar líneas: {id, inventoryId, qty, costPrice}
+  const[lines,setLines]=useState(order.items.map(r=>({id:r.id,inventoryId:r.inventoryId,qty:String(r.qty||""),costPrice:String(r.costPrice||""),origQty:parseInt(r.qty)||0})));
+  const fileRef=useRef();
+
+  const[uploading,setUploading]=useState(false);
+  const handleFiles=async(e)=>{
+    const files=[...e.target.files];e.target.value="";
+    if(!files.length)return;
+    const token=getGoogleToken();
+    if(!token){
+      for(const file of files){
+        if(file.size>300000){alert(`"${file.name}" es muy grande. Inicia sesión con Google para subir archivos pesados.`);continue;}
+        const reader=new FileReader();
+        reader.onload=ev=>setAttachments(a=>[...a,{name:file.name,dataUrl:ev.target.result,type:file.type}]);
+        reader.readAsDataURL(file);
+      }
+      return;
+    }
+    setUploading(true);
+    for(const file of files){
+      try{
+        const result=await uploadToDrive(file);
+        setAttachments(a=>[...a,{name:result.name,url:result.url,driveId:result.id}]);
+      }catch(err){alert(`Error subiendo "${file.name}": ${err.message}`);}
+    }
+    setUploading(false);
+  };
+  const setLine=(id,field,val)=>setLines(ls=>ls.map(l=>l.id===id?{...l,[field]:val}:l));
+
+  const shipNum=parseFloat(shippingCost||0);
+  const mktNum=parseFloat(marketingCost||0);
+  const totalUnitsNew=lines.reduce((a,l)=>a+(parseInt(l.qty)||0),0);
+  const totalInvested=lines.reduce((a,l)=>a+(parseFloat(l.costPrice||0)*(parseInt(l.qty)||0)),0);
+  const extraPerUnit=totalUnitsNew>0?(shipNum+mktNum)/totalUnitsNew:0;
+
+  const doSave=async()=>{
+    // Calcular diferencia de stock por producto
+    let updatedInv=[...inventory];
+    const updatedRestocks=restocks.map(r=>{
+      if((r.orderId||r.id)!==order.orderId)return r;
+      const line=lines.find(l=>l.id===r.id);
+      if(!line)return r;
+      const newQty=parseInt(line.qty)||0;
+      const origQty=line.origQty;
+      const diff=newQty-origQty;
+      const costP=parseFloat(line.costPrice||0);
+      const costWithExtra=(costP+extraPerUnit).toFixed(2);
+      // Ajustar stock
+      updatedInv=updatedInv.map(p=>p.id===r.inventoryId?{...p,stock:Math.max(0,(parseInt(p.stock)||0)+diff),...(line.costPrice?{costPrice:costWithExtra}:{})}:p);
+      return{...r,qty:newQty,costPrice:line.costPrice||"",costPriceWithExtra:costWithExtra,extraCostPerUnit:extraPerUnit.toFixed(2),totalPaid:((costP+extraPerUnit)*newQty).toFixed(2),date,supplierId,notes,shippingCost,marketingCost,attachments};
+    });
+    setInventory(updatedInv);await saveData("inventory",updatedInv);
+    setRestocks(updatedRestocks);await saveData("restocks",updatedRestocks);
+    onClose();
+  };
+
+  return(
+    <Modal title={`✏️ Editar Pedido #${order.orderId.slice(-6).toUpperCase()}`} onClose={onClose} wide>
+      {/* Metadata */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"12px",marginBottom:10,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:11,fontWeight:600,color:G.goldLight,marginBottom:8,letterSpacing:1}}>INFORMACIÓN DEL PEDIDO</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Field label="📅 Fecha"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></Field>
+          <Field label="🏪 Proveedor">
+            <select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>
+              <option value="">— Sin especificar —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Field label="🚚 Costo envío $"><input type="number" onWheel={e=>e.target.blur()} min="0" value={shippingCost} onChange={e=>setShippingCost(e.target.value)} placeholder="0.00"/></Field>
+          <Field label="📣 Costo marketing $"><input type="number" onWheel={e=>e.target.blur()} min="0" value={marketingCost} onChange={e=>setMarketingCost(e.target.value)} placeholder="0.00"/></Field>
+        </div>
+        <Field label="📝 Notas"><textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Notas..."/></Field>
+      </div>
+
+      {/* Líneas del pedido editables */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"12px",marginBottom:10,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:11,fontWeight:600,color:G.goldLight,marginBottom:8,letterSpacing:1}}>PRODUCTOS DEL PEDIDO</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>
+          {lines.map(l=>{
+            const prod=inventory.find(p=>p.id===l.inventoryId);
+            const newQty=parseInt(l.qty)||0;
+            const diff=newQty-l.origQty;
+            return(
+              <div key={l.id} style={{padding:"10px 12px",borderRadius:8,border:`1px solid ${G.cardBorder}`,background:"rgba(255,255,255,.02)"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:10,alignItems:"center"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{prod?.name||"Producto eliminado"}</div>
+                    <div style={{fontSize:11,color:G.textMuted}}>{prod?.brand}{prod?.size&&` · ${prod.size}`}</div>
+                    {diff!==0&&<div style={{fontSize:11,color:diff>0?G.green:G.red,marginTop:2}}>{diff>0?`+${diff}`:diff} unidades vs original</div>}
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:3,textAlign:"center"}}>Unidades</div>
+                    <input type="number" onWheel={e=>e.target.blur()} min="0" value={l.qty} onChange={e=>setLine(l.id,"qty",e.target.value)} onWheel={e=>e.target.blur()} style={{textAlign:"center",fontWeight:700,fontSize:14}}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:3,textAlign:"center"}}>Precio compra $</div>
+                    <input type="number" onWheel={e=>e.target.blur()} min="0" value={l.costPrice} onChange={e=>setLine(l.id,"costPrice",e.target.value)} onWheel={e=>e.target.blur()} style={{textAlign:"center",fontSize:13}}/>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {(shipNum>0||mktNum>0)&&totalUnitsNew>0&&(
+          <div style={{fontSize:12,color:G.textMuted,marginTop:8,padding:"6px 8px",background:"rgba(201,168,76,.05)",borderRadius:6}}>
+            Costos adicionales: <strong style={{color:G.gold}}>{fmt$(extraPerUnit)}/unidad</strong> · Total: <strong style={{color:G.green}}>{fmt$(totalInvested+shipNum+mktNum)}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Adjuntos */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"12px",marginBottom:10,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:11,fontWeight:600,color:G.goldLight,marginBottom:8,letterSpacing:1}}>📎 COMPROBANTES</div>
+        <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple onChange={handleFiles} style={{display:"none"}}/>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <Btn variant="ghost" size="sm" onClick={()=>fileRef.current.click()}>+ Subir archivo(s)</Btn>
+          {attachments.map((a,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.05)",border:`1px solid ${G.cardBorder}`,borderRadius:8,padding:"4px 10px",fontSize:12}}>
+              <span>{a.type&&a.type.startsWith("image/")?"🖼️":"📄"}</span>
+              <span style={{maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+              <button onClick={()=>setAttachments(a=>a.filter((_,idx)=>idx!==i))} style={{background:"none",border:"none",color:G.red,cursor:"pointer",fontSize:14,padding:0}}>×</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:10}}>
+        <Btn variant="ghost" onClick={onClose} style={{flex:1}}>Cancelar</Btn>
+        <Btn onClick={doSave} style={{flex:2}}>💾 Guardar cambios</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function BulkRestockModal({inventory,setInventory,restocks,setRestocks,suppliers,onClose}){
+  const[date,setDate]=useState(today());
+  const[supplierId,setSupplierId]=useState("");
+  const[notes,setNotes]=useState("");
+  const[shippingCost,setShippingCost]=useState("");
+  const[marketingCost,setMarketingCost]=useState("");
+  const[lines,setLines]=useState(inventory.map(p=>({inventoryId:p.id,qty:"",costPrice:p.costPrice||""})));
+  const[search,setSearch]=useState("");
+  const[attachments,setAttachments]=useState([]);
+  const fileRef=useRef();
+
+  const setLine=(id,field,val)=>setLines(ls=>ls.map(l=>l.inventoryId===id?{...l,[field]:val}:l));
+  const[uploading,setUploading]=useState(false);
+  const handleFiles=async(e)=>{
+    const files=[...e.target.files];e.target.value="";
+    if(!files.length)return;
+    const token=getGoogleToken();
+    if(!token){
+      // Sin Drive: guardar como base64 pequeño (solo imágenes, max 300KB)
+      for(const file of files){
+        if(file.size>300000){alert(`"${file.name}" es muy grande. Inicia sesión con Google para subir archivos pesados.`);continue;}
+        const reader=new FileReader();
+        reader.onload=ev=>setAttachments(a=>[...a,{name:file.name,dataUrl:ev.target.result,type:file.type}]);
+        reader.readAsDataURL(file);
+      }
+      return;
+    }
+    setUploading(true);
+    for(const file of files){
+      try{
+        const result=await uploadToDrive(file);
+        setAttachments(a=>[...a,{name:result.name,url:result.url,driveId:result.id}]);
+      }catch(err){alert(`Error subiendo "${file.name}": ${err.message}`);}
+    }
+    setUploading(false);
+  };
+
+  const activeLines=lines.filter(l=>parseInt(l.qty)>0);
+  const totalUnitsIn=activeLines.reduce((a,l)=>a+(parseInt(l.qty)||0),0);
+  const totalInvested=activeLines.reduce((a,l)=>a+(parseFloat(l.costPrice||0)*(parseInt(l.qty)||0)),0);
+  const shipNum=parseFloat(shippingCost||0);
+  const mktNum=parseFloat(marketingCost||0);
+  const extraPerUnit=totalUnitsIn>0?(shipNum+mktNum)/totalUnitsIn:0;
+  const totalWithExtra=totalInvested+shipNum+mktNum;
+
+  const doSave=async()=>{
+    if(activeLines.length===0)return alert("Ingresa al menos una cantidad mayor a 0.");
+    const orderId=uid();
+    let updatedInv=[...inventory];
+    const newRestocks=[];
+    for(let i=0;i<activeLines.length;i++){
+      const l=activeLines[i];
+      const qty=parseInt(l.qty);
+      const costP=parseFloat(l.costPrice||0);
+      const costWithExtra=(costP+extraPerUnit).toFixed(2);
+      updatedInv=updatedInv.map(p=>p.id===l.inventoryId?{...p,stock:(parseInt(p.stock)||0)+qty,...(l.costPrice?{costPrice:costWithExtra}:{})}:p);
+      newRestocks.push({
+        id:uid(),orderId,inventoryId:l.inventoryId,qty,
+        costPrice:l.costPrice||"",costPriceWithExtra:costWithExtra,
+        extraCostPerUnit:extraPerUnit.toFixed(2),
+        totalPaid:((costP+extraPerUnit)*qty).toFixed(2),
+        supplierId:supplierId||"",shippingCost,marketingCost,
+        date,notes,
+        // Adjuntos SOLO en la primera línea para no duplicar MBs en Firebase
+        attachments:i===0?attachments:[],
+        createdAt:now()
+      });
+    }
+    setInventory(updatedInv);await saveData("inventory",updatedInv);
+    const updatedR=[...restocks,...newRestocks];
+    setRestocks(updatedR);await saveData("restocks",updatedR);
+    onClose();
+  };
+
+  const filtered=inventory.filter(p=>
+    p.name.toLowerCase().includes(search.toLowerCase())||
+    (p.brand&&p.brand.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  return(
+    <Modal title="📦 Nuevo Pedido" onClose={onClose} wide>
+      {/* Sección 1: Info general */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"14px",marginBottom:12,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:G.goldLight,marginBottom:10,letterSpacing:1}}>INFORMACIÓN DEL PEDIDO</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Field label="📅 Fecha de entrada"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></Field>
+          <Field label="🏪 Proveedor">
+            <select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>
+              <option value="">— Sin especificar —</option>
+              {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}{s.phone?` · ${s.phone}`:""}</option>)}
+            </select>
+          </Field>
+        </div>
+        <Field label="📝 Notas del pedido"><input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Ej. Pedido mensual de verano..."/></Field>
+      </div>
+
+      {/* Sección 2: Costos adicionales */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"14px",marginBottom:12,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:G.goldLight,marginBottom:10,letterSpacing:1}}>COSTOS ADICIONALES</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Field label="🚚 Costo de envío $"><input type="number" onWheel={e=>e.target.blur()} min="0" value={shippingCost} onChange={e=>setShippingCost(e.target.value)} placeholder="0.00"/></Field>
+          <Field label="📣 Costo de marketing $"><input type="number" onWheel={e=>e.target.blur()} min="0" value={marketingCost} onChange={e=>setMarketingCost(e.target.value)} placeholder="0.00"/></Field>
+        </div>
+        {(shipNum>0||mktNum>0)&&totalUnitsIn>0&&<div style={{fontSize:12,color:G.textMuted,marginTop:6,padding:"6px 8px",background:"rgba(201,168,76,.05)",borderRadius:6}}>
+          Se distribuirán <strong style={{color:G.gold}}>{fmt$(extraPerUnit)}/unidad</strong> de costos adicionales.
+        </div>}
+      </div>
+
+      {/* Sección 3: Productos */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"14px",marginBottom:12,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:G.goldLight,marginBottom:10,letterSpacing:1}}>PRODUCTOS A INGRESAR</div>
+        <input placeholder="🔍 Filtrar productos..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:10}}/>
+        <div style={{maxHeight:300,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,paddingRight:4}}>
+          {filtered.map(p=>{
+            const line=lines.find(l=>l.inventoryId===p.id)||{qty:"",costPrice:""};
+            const hasQty=parseInt(line.qty)>0;
+            const costNum=parseFloat(line.costPrice||0);
+            const finalCost=costNum+extraPerUnit;
+            return(
+              <div key={p.id} style={{padding:"10px 12px",borderRadius:8,border:`1px solid ${hasQty?G.gold:G.cardBorder}`,background:hasQty?"rgba(201,168,76,.04)":"rgba(255,255,255,.01)",transition:"all .15s"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:10,alignItems:"center"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{p.name}</div>
+                    <div style={{fontSize:11,color:G.textMuted}}>{p.brand&&p.brand}{p.size&&` · ${p.size}`}
+                      <span style={{marginLeft:8,color:hasQty?G.green:G.textMuted}}>Stock: {parseInt(p.stock)||0}{hasQty&&<span style={{color:G.green}}> → {(parseInt(p.stock)||0)+(parseInt(line.qty)||0)}</span>}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:3,textAlign:"center"}}>Unidades</div>
+                    <input type="number" onWheel={e=>e.target.blur()} min="0" placeholder="0" value={line.qty} onChange={e=>setLine(p.id,"qty",e.target.value)} onWheel={e=>e.target.blur()} style={{textAlign:"center",fontWeight:700,fontSize:15,color:hasQty?G.green:G.text}}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:G.textMuted,marginBottom:3,textAlign:"center"}}>Precio compra $</div>
+                    <input type="number" onWheel={e=>e.target.blur()} min="0" placeholder={p.costPrice||"0.00"} value={line.costPrice} onChange={e=>setLine(p.id,"costPrice",e.target.value)} onWheel={e=>e.target.blur()} style={{textAlign:"center",fontSize:13}}/>
+                  </div>
+                </div>
+                {hasQty&&(shipNum>0||mktNum>0)&&(
+                  <div style={{marginTop:6,display:"flex",gap:10,fontSize:11,padding:"4px 8px",background:"rgba(255,255,255,.03)",borderRadius:5}}>
+                    <span style={{color:G.textMuted}}>Perfume: <strong style={{color:G.text}}>{fmt$(costNum)}</strong></span>
+                    <span style={{color:G.textMuted}}>+ Extras: <strong style={{color:G.gold}}>{fmt$(extraPerUnit)}</strong></span>
+                    <span style={{color:G.textMuted}}>= <strong style={{color:G.green}}>{fmt$(finalCost)}/u</strong></span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Resumen total */}
+      {totalUnitsIn>0&&(
+        <div style={{padding:"12px 14px",background:"rgba(76,175,125,.07)",border:"1px solid rgba(76,175,125,.25)",borderRadius:10,marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:600,color:G.green,marginBottom:8}}>RESUMEN DEL PEDIDO</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,fontSize:13}}>
+            <div><span style={{color:G.textMuted}}>Unidades: </span><strong style={{color:G.green}}>{totalUnitsIn}</strong></div>
+            <div><span style={{color:G.textMuted}}>Perfumes: </span><strong>{fmt$(totalInvested)}</strong></div>
+            {shipNum>0&&<div><span style={{color:G.textMuted}}>Envío: </span><strong style={{color:G.gold}}>{fmt$(shipNum)}</strong></div>}
+            {mktNum>0&&<div><span style={{color:G.textMuted}}>Marketing: </span><strong style={{color:G.blue}}>{fmt$(mktNum)}</strong></div>}
+            <div><span style={{color:G.textMuted}}>Total: </span><strong style={{color:G.green,fontSize:15}}>{fmt$(totalWithExtra)}</strong></div>
+          </div>
+        </div>
+      )}
+
+      {/* Sección 4: Adjuntos */}
+      <div style={{background:"rgba(255,255,255,.02)",borderRadius:10,padding:"14px",marginBottom:12,border:`1px solid ${G.cardBorder}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:G.goldLight,marginBottom:6,letterSpacing:1}}>📎 COMPROBANTES</div>
+        {!getGoogleToken()&&<div style={{fontSize:11,color:"#888",marginBottom:8,padding:"6px 10px",background:"rgba(255,255,255,.03)",borderRadius:6}}>💡 Inicia sesión con Google para subir PDFs e imágenes a Drive sin límite de tamaño.</div>}
+        <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple onChange={handleFiles} style={{display:"none"}}/>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <Btn variant="ghost" size="sm" onClick={()=>fileRef.current.click()} disabled={uploading}>
+            {uploading?"⏳ Subiendo...":"+ Subir bauche(s)"}
+          </Btn>
+          {attachments.map((a,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.05)",border:`1px solid ${G.cardBorder}`,borderRadius:8,padding:"4px 10px",fontSize:12}}>
+              <span>{a.url?"☁️":a.type&&a.type.startsWith("image/")?"🖼️":"📄"}</span>
+              {a.url
+                ?<a href={a.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:G.gold,textDecoration:"none"}}>{a.name}</a>
+                :<span style={{maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</span>
+              }
+              <button onClick={()=>setAttachments(at=>at.filter((_,idx)=>idx!==i))} style={{background:"none",border:"none",color:G.red,cursor:"pointer",fontSize:14,padding:0}}>×</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:10}}>
+        <Btn variant="ghost" onClick={onClose} style={{flex:1}}>Cancelar</Btn>
+        <Btn onClick={doSave} disabled={totalUnitsIn===0} style={{flex:2,opacity:totalUnitsIn===0?.5:1}}>
+          ✅ Registrar pedido — {totalUnitsIn} unidad(es) · {fmt$(totalWithExtra)}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── EXPORTAR ─────────────────────────────────────────────────────────────────
+function Exportar({clients,sales,payments,inventory}){
+  const exportExcel=()=>{
+    const wb=XLSX.utils.book_new();
+    const clientData=clients.map(c=>({"Nombre":c.name,"CI":c.ci||"","Teléfono":c.phone||"","Dirección":c.address||"","Notas":c.notes||"","Registro":c.createdAt}));
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clientData.length?clientData:[{}]),"Clientes");
+    const salesData=sales.map(s=>{const bal=calcSaleBalance(s,payments);const client=clients.find(c=>c.id===s.clientId);return{"Cliente":client?.name||"","CI":client?.ci||"","Perfume":s.perfume,"Total $":parseFloat(s.total),"Pagado $":bal.paid,"Restante $":bal.remaining,"Estado":bal.status,"Fecha":s.date,"Notas":s.notes||""};});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(salesData.length?salesData:[{}]),"Ventas");
+    const payData=payments.map(p=>{const client=clients.find(c=>c.id===p.clientId);const sale=sales.find(s=>s.id===p.saleId);return{"Cliente":client?.name||"","CI":client?.ci||"","Perfume":sale?.perfume||"","Monto $":parseFloat(p.amount),"Fecha":p.date,"Tipo":p.isInitial?"Pago inicial":"Abono","Notas":p.notes||""};});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(payData.length?payData:[{}]),"Abonos");
+    const invData=inventory.map(p=>({"Producto":p.name,"Marca":p.brand||"","Tamaño":p.size||"","Stock":parseInt(p.stock)||0,"Stock mínimo":p.minStock!==''&&p.minStock!=null?parseInt(p.minStock):2,"Costo $":parseFloat(p.costPrice||0),"Precio venta $":parseFloat(p.salePrice||0),"Ganancia $":parseFloat(p.salePrice||0)-parseFloat(p.costPrice||0),"Notas":p.notes||""}));
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(invData.length?invData:[{}]),"Inventario");
+    const totalDebt=sales.reduce((a,s)=>a+calcSaleBalance(s,payments).remaining,0);
+    const totalCollected=payments.reduce((a,p)=>a+parseFloat(p.amount||0),0);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet([{"Concepto":"Total Clientes","Valor":clients.length},{"Concepto":"Total Ventas","Valor":sales.length},{"Concepto":"Total Cobrado $","Valor":totalCollected},{"Concepto":"Total por Cobrar $","Valor":totalDebt},{"Concepto":"Productos en inventario","Valor":inventory.length},{"Concepto":"Exportado el","Valor":new Date().toLocaleString("es-ES")}]),"Resumen");
+    XLSX.writeFile(wb,`PerSenso_${today()}.xlsx`);
+  };
+  const totalDebt=sales.reduce((a,s)=>a+calcSaleBalance(s,payments).remaining,0);
+  const totalCollected=payments.reduce((a,p)=>a+parseFloat(p.amount||0),0);
+  return(
+    <div className="fade-in">
+      <div style={{fontFamily:"Cormorant Garamond",fontSize:28,color:G.goldLight,marginBottom:4}}>Exportar Datos</div>
+      <div style={{color:G.textMuted,fontSize:13,marginBottom:24}}>Descarga un archivo Excel con toda la información</div>
+      <Card style={{maxWidth:480,marginBottom:20}}>
+        <div style={{fontFamily:"Cormorant Garamond",fontSize:20,color:G.gold,marginBottom:16}}>📊 Resumen a Exportar</div>
+        {[["Clientes",clients.length],["Ventas registradas",sales.length],["Abonos registrados",payments.length],["Productos en inventario",inventory.length],["Total cobrado",fmt$(totalCollected)],["Total por cobrar",fmt$(totalDebt)]].map(([k,v])=>(
+          <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${G.cardBorder}`,fontSize:14}}><span style={{color:G.textMuted}}>{k}</span><span style={{fontWeight:600}}>{v}</span></div>
+        ))}
+        <Btn onClick={exportExcel} style={{width:"100%",marginTop:20}}>⬇️ Descargar Excel (.xlsx)</Btn>
+      </Card>
+    </div>
+  );
+}
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+function Login({onLogin}){
+  const[user,setUser]=useState("");
+  const[pass,setPass]=useState("");
+  const[showPass,setShowPass]=useState(false);
+  const[error,setError]=useState("");
+  const[shaking,setShaking]=useState(false);
+  const attempt=()=>{
+    if(user==="PerSensoVzla"&&pass==="PerfumesJam2025."){onLogin(user);}
+    else{setError("Usuario o contraseña incorrectos");setShaking(true);setTimeout(()=>setShaking(false),500);}
+  };
+  return(
+    <div style={{minHeight:"100vh",background:"#0d0d0f",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div className="fade-in" style={{width:"100%",maxWidth:380,background:"#16161a",border:"1px solid #2a2a32",borderRadius:20,padding:"40px 32px",animation:shaking?"shake .4s ease":undefined}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontFamily:"Cormorant Garamond",fontSize:42,color:"#e8c97a",fontStyle:"italic",letterSpacing:2}}>✦ PerSenso</div>
+          <div style={{fontSize:12,color:"#888",marginTop:6,letterSpacing:1}}>GESTIÓN DE PERFUMERÍA</div>
+        </div>
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:12,color:"#888",display:"block",marginBottom:6}}>Usuario</label>
+          <input value={user} onChange={e=>{setUser(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Ingresa tu usuario" autoComplete="username"/>
+        </div>
+        <div style={{marginBottom:24}}>
+          <label style={{fontSize:12,color:"#888",display:"block",marginBottom:6}}>Contraseña</label>
+          <div style={{position:"relative"}}>
+            <input type={showPass?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Ingresa tu contraseña" autoComplete="current-password" style={{paddingRight:44}}/>
+            <button onClick={()=>setShowPass(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#888",fontSize:16,cursor:"pointer",padding:0}}>{showPass?"🙈":"👁️"}</button>
+          </div>
+        </div>
+        {error&&<div style={{background:"rgba(224,92,92,.12)",border:"1px solid rgba(224,92,92,.3)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#e05c5c",textAlign:"center"}}>⚠️ {error}</div>}
+        <button onClick={attempt} style={{width:"100%",padding:"12px 0",background:"linear-gradient(135deg,#8a6c28,#c9a84c)",border:"none",borderRadius:10,color:"#0d0d0f",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>Ingresar</button>
+        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#444"}}>PerSenso · Sistema de Gestión</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
+function App(){
+  const[loggedIn,setLoggedIn]=useState(false);
+  const[userName,setUserName]=useState("");
+  const handleLogin=(name)=>{setLoggedIn(true);setUserName(name||"");};
+  const handleLogout=()=>{clearGoogleSession();setLoggedIn(false);setUserName("");};
+  const[tab,setTab]=useState("dashboard");
+  const[clients,setClients]=useState([]);
+  const[sales,setSales]=useState([]);
+  const[payments,setPayments]=useState([]);
+  const[inventory,setInventory]=useState([]);
+  const[suppliers,setSuppliers]=useState([]);
+  const[restocks,setRestocks]=useState([]);
+  const[loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    const load=async()=>{
+      if(_saving)return;
+      try{
+        const[c,s,p,inv,sup,rst]=await Promise.all([fbGet("clients"),fbGet("sales"),fbGet("payments"),fbGet("inventory"),fbGet("suppliers"),fbGet("restocks")]);
+        if(_saving)return;
+        const saleIds=new Set(s.map(sale=>sale.id));
+        const cleanP=p.filter(pay=>saleIds.has(pay.saleId));
+        if(cleanP.length!==p.length)await saveData("payments",cleanP);
+
+        // Limpiar adjuntos duplicados: solo la primera línea de cada pedido los guarda
+        const byOrder={};
+        let needsClean=false;
+        const cleanRst=rst.map(r=>{
+          const oid=r.orderId||r.id;
+          if(!byOrder[oid]){byOrder[oid]=true;return r;} // primera línea: ok
+          if(r.attachments&&r.attachments.length>0){needsClean=true;return{...r,attachments:[]};}
+          return r;
+        });
+        if(needsClean){await saveData("restocks",cleanRst);setRestocks(cleanRst);}
+        else setRestocks(rst);
+
+        setClients(c);setSales(s);setPayments(cleanP);setInventory(inv);setSuppliers(sup);
+      }catch(e){console.error("Load error:",e);}
+      setLoading(false);
+    };
+    load();
+    const iv=setInterval(load,5000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  if(!loggedIn)return <Login onLogin={handleLogin}/>;
+  if(loading)return(
+    <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16,background:"#0d0d0f"}}>
+      <div style={{fontFamily:"Cormorant Garamond",fontSize:36,color:"#e8c97a"}}>✦ PerSenso</div>
+      <div style={{color:"#888",fontSize:13}}>Conectando con Firebase...</div>
+    </div>
+  );
+
+  const lowStockCount=inventory.filter(p=>(parseInt(p.stock)||0)<=(p.minStock!==''&&p.minStock!=null?parseInt(p.minStock):2)).length;
+  const tabs=[
+    {id:"dashboard",icon:"◈",label:"Inicio"},
+    {id:"clientes",icon:"👥",label:"Clientes"},
+    {id:"ventas",icon:"🌸",label:"Ventas"},
+    {id:"abonos",icon:"💳",label:"Abonos"},
+    {id:"inventario",icon:"📦",label:"Inventario",badge:lowStockCount},
+    {id:"pedidos",icon:"🛒",label:"Pedidos"},
+    {id:"exportar",icon:"📤",label:"Exportar"},
+  ];
+
+  return(
+    <div style={{minHeight:"100vh",paddingBottom:80}}>
+      <div style={{background:G.card,borderBottom:`1px solid ${G.cardBorder}`,padding:"14px 20px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10}}>
+        <div style={{fontFamily:"Cormorant Garamond",fontSize:22,color:G.goldLight,fontStyle:"italic"}}>✦ PerSenso</div>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:11,padding:"4px 10px",background:"rgba(76,175,125,.1)",borderRadius:20,border:"1px solid rgba(76,175,125,.2)",color:G.green}}>● Firebase · 5s</div>
+          {userName&&<div style={{fontSize:11,color:"#888",padding:"4px 10px",background:"rgba(255,255,255,.04)",borderRadius:20,border:`1px solid ${G.cardBorder}`}}>👤 {userName.split(" ")[0]}</div>}
+          <button onClick={handleLogout} style={{background:"rgba(224,92,92,.12)",border:"1px solid rgba(224,92,92,.25)",borderRadius:8,color:"#e05c5c",fontSize:12,padding:"5px 10px",cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>🚪 Salir</button>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:4,padding:"12px 20px",borderBottom:`1px solid ${G.cardBorder}`,flexWrap:"wrap"}}>
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{background:tab===t.id?`linear-gradient(135deg,${G.goldDark},${G.gold})`:"transparent",color:tab===t.id?"#0d0d0f":G.textMuted,border:tab===t.id?"none":`1px solid ${G.cardBorder}`,borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:6,transition:"all .2s",position:"relative"}}>
+            <span>{t.icon}</span><span>{t.label}</span>
+            {t.badge>0&&<span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:16,height:16,borderRadius:8,background:G.red,color:"#fff",fontSize:10,fontWeight:700,padding:"0 4px",marginLeft:2}}>{t.badge}</span>}
+          </button>
+        ))}
+      </div>
+      <div style={{maxWidth:960,margin:"0 auto",padding:"24px 16px"}}>
+        {tab==="dashboard"&&<Inicio clients={clients} sales={sales} payments={payments} inventory={inventory}/>}
+        {tab==="clientes"&&<Clientes clients={clients} setClients={setClients} sales={sales} payments={payments} inventory={inventory} suppliers={suppliers}/>}
+        {tab==="ventas"&&<Ventas clients={clients} sales={sales} setSales={setSales} payments={payments} setPayments={setPayments} inventory={inventory} setInventory={setInventory} suppliers={suppliers}/>}
+        {tab==="abonos"&&<Abonos clients={clients} sales={sales} payments={payments} setPayments={setPayments} inventory={inventory} suppliers={suppliers}/>}
+        {tab==="inventario"&&<Inventario inventory={inventory} setInventory={setInventory} suppliers={suppliers} restocks={restocks} setRestocks={setRestocks}/>}
+        {tab==="pedidos"&&<Pedidos inventory={inventory} setInventory={setInventory} suppliers={suppliers} setSuppliers={setSuppliers} restocks={restocks} setRestocks={setRestocks}/>}
+        {tab==="exportar"&&<Exportar clients={clients} sales={sales} payments={payments} inventory={inventory}/>}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
