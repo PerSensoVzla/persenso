@@ -1914,36 +1914,64 @@ function Exportar({clients,sales,payments,inventory}){
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function Login({onLogin}){
-  const[user,setUser]=useState("");
-  const[pass,setPass]=useState("");
-  const[showPass,setShowPass]=useState(false);
   const[error,setError]=useState("");
-  const[shaking,setShaking]=useState(false);
-  const attempt=()=>{
-    if(user==="PerSensoVzla"&&pass==="PerfumesJam2025."){onLogin(user);}
-    else{setError("Usuario o contraseña incorrectos");setShaking(true);setTimeout(()=>setShaking(false),500);}
+  const[loading,setLoading]=useState(false);
+  const btnRef=useRef();
+
+  useEffect(()=>{
+    const init=()=>{
+      if(!window.google)return setTimeout(init,300);
+      window.google.accounts.id.initialize({
+        client_id:GOOGLE_CLIENT_ID,
+        callback:handleCredential,
+        auto_select:false,
+      });
+      window.google.accounts.id.renderButton(btnRef.current,{
+        theme:"filled_black",size:"large",shape:"pill",
+        text:"signin_with",logo_alignment:"center",width:280,
+      });
+    };
+    init();
+  },[]);
+
+  const handleCredential=async(response)=>{
+    setLoading(true);setError("");
+    try{
+      const payload=JSON.parse(atob(response.credential.split(".")[1]));
+      const email=payload.email.toLowerCase();
+      const name=payload.name||email;
+      if(!ALLOWED_EMAILS.includes(email)){
+        setError(`❌ ${email} no tiene acceso a PerSenso.`);
+        setLoading(false);return;
+      }
+      window.google.accounts.oauth2.initTokenClient({
+        client_id:GOOGLE_CLIENT_ID,
+        scope:"https://www.googleapis.com/auth/drive.file",
+        callback:(tokenResp)=>{
+          if(tokenResp.access_token)setGoogleSession(tokenResp.access_token,email,name);
+          onLogin(name);
+        },
+      }).requestAccessToken({prompt:""});
+    }catch(e){
+      setError("Error al iniciar sesión. Intenta de nuevo.");
+      setLoading(false);
+    }
   };
+
   return(
     <div style={{minHeight:"100vh",background:"#0d0d0f",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-      <div className="fade-in" style={{width:"100%",maxWidth:380,background:"#16161a",border:"1px solid #2a2a32",borderRadius:20,padding:"40px 32px",animation:shaking?"shake .4s ease":undefined}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
+      <div className="fade-in" style={{width:"100%",maxWidth:380,background:"#16161a",border:"1px solid #2a2a32",borderRadius:20,padding:"40px 32px"}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
           <div style={{fontFamily:"Cormorant Garamond",fontSize:42,color:"#e8c97a",fontStyle:"italic",letterSpacing:2}}>✦ PerSenso</div>
           <div style={{fontSize:12,color:"#888",marginTop:6,letterSpacing:1}}>GESTIÓN DE PERFUMERÍA</div>
         </div>
-        <div style={{marginBottom:16}}>
-          <label style={{fontSize:12,color:"#888",display:"block",marginBottom:6}}>Usuario</label>
-          <input value={user} onChange={e=>{setUser(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Ingresa tu usuario" autoComplete="username"/>
-        </div>
-        <div style={{marginBottom:24}}>
-          <label style={{fontSize:12,color:"#888",display:"block",marginBottom:6}}>Contraseña</label>
-          <div style={{position:"relative"}}>
-            <input type={showPass?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="Ingresa tu contraseña" autoComplete="current-password" style={{paddingRight:44}}/>
-            <button onClick={()=>setShowPass(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#888",fontSize:16,cursor:"pointer",padding:0}}>{showPass?"🙈":"👁️"}</button>
-          </div>
-        </div>
-        {error&&<div style={{background:"rgba(224,92,92,.12)",border:"1px solid rgba(224,92,92,.3)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#e05c5c",textAlign:"center"}}>⚠️ {error}</div>}
-        <button onClick={attempt} style={{width:"100%",padding:"12px 0",background:"linear-gradient(135deg,#8a6c28,#c9a84c)",border:"none",borderRadius:10,color:"#0d0d0f",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>Ingresar</button>
-        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#444"}}>PerSenso · Sistema de Gestión</div>
+        <div style={{textAlign:"center",marginBottom:20,fontSize:13,color:"#888"}}>Inicia sesión con tu cuenta de Google autorizada</div>
+        {error&&<div style={{background:"rgba(224,92,92,.12)",border:"1px solid rgba(224,92,92,.3)",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#e05c5c",textAlign:"center"}}>{error}</div>}
+        {loading
+          ?<div style={{textAlign:"center",color:"#888",fontSize:13,padding:20}}>Conectando...</div>
+          :<div style={{display:"flex",justifyContent:"center",minHeight:44}} ref={btnRef}/>
+        }
+        <div style={{textAlign:"center",marginTop:24,fontSize:11,color:"#333"}}>Solo cuentas autorizadas pueden acceder</div>
       </div>
     </div>
   );
